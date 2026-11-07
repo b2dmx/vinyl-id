@@ -33,18 +33,31 @@ class Track:
         return (self.shazam_id or f"{self.artist}|{self.title}").lower()
 
 
+def _shift(side: str, by: int) -> str:
+    """A -> C when shifted by two sides (single letters only; anything else is left alone)."""
+    return chr(ord(side) + by) if by and len(side) == 1 and side.isalpha() else side
+
+
 def parse_release(data: dict) -> dict:
     """A MusicBrainz release -> {mbid, artist, album, year, tracks:[{n, side, pos, title, length}]}.
     Vinyl track numbers look like 'A1', 'B3'; for anything else each medium counts as one side."""
-    tracks, n = [], 0
+    tracks, n, used = [], 0, []          # used: side letters of earlier discs, in order
     for disc, medium in enumerate(data.get("media") or [], start=1):
-        for i, t in enumerate(medium.get("tracks") or [], start=1):
+        parsed = [(re.match(r"^([A-Za-z]+)(\d+)$", (t.get("number") or "").strip()), t)
+                  for t in medium.get("tracks") or []]
+        letters = list(dict.fromkeys(m.group(1).upper() for m, _ in parsed if m))
+        # a second LP whose sides restart at A/B becomes C/D, so every side is unique
+        shift = len(used) if any(s in used for s in letters) else 0
+        for i, (m, t) in enumerate(parsed, start=1):
             n += 1
-            m = re.match(r"^([A-Za-z]+)(\d+)$", (t.get("number") or "").strip())
-            side, pos = (m.group(1).upper(), int(m.group(2))) if m else (str(medium.get("position", disc)), i)
+            if m:
+                side, pos = _shift(m.group(1).upper(), shift), int(m.group(2))
+            else:
+                side, pos = str(medium.get("position", disc)), i
             ms = t.get("length") or (t.get("recording") or {}).get("length")
-            tracks.append({"n": n, "side": side, "pos": pos, "title": t.get("title", ""),
+            tracks.append({"n": n, "disc": disc, "side": side, "pos": pos, "title": t.get("title", ""),
                            "length": ms / 1000 if ms else None})
+        used += [s for s in dict.fromkeys(x["side"] for x in tracks if x["disc"] == disc)]
     return {
         "mbid": data.get("id", ""), "album": data.get("title", ""),
         "artist": "".join(c.get("name", "") + c.get("joinphrase", "")

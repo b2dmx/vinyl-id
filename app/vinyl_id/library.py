@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS songs (
   last_played REAL, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS tracks (
   id INTEGER PRIMARY KEY, album_id INTEGER NOT NULL, n INTEGER NOT NULL,
-  side TEXT NOT NULL, pos INTEGER NOT NULL, title TEXT NOT NULL,
+  disc INTEGER NOT NULL DEFAULT 1, side TEXT NOT NULL, pos INTEGER NOT NULL, title TEXT NOT NULL,
   length REAL, song_id INTEGER);
 CREATE INDEX IF NOT EXISTS tracks_album ON tracks (album_id, n);
 CREATE TABLE IF NOT EXISTS hashes (
@@ -74,8 +74,8 @@ class TrackMixin:
         self.db.execute("DELETE FROM tracks WHERE album_id=?", (album_id,))
         for t in tracks:
             self.db.execute(
-                "INSERT INTO tracks (album_id, n, side, pos, title, length, song_id) VALUES (?,?,?,?,?,?,?)",
-                (album_id, t["n"], t["side"], t["pos"], t["title"], t.get("length"),
+                "INSERT INTO tracks (album_id, n, disc, side, pos, title, length, song_id) VALUES (?,?,?,?,?,?,?,?)",
+                (album_id, t["n"], t.get("disc", 1), t["side"], t["pos"], t["title"], t.get("length"),
                  old.get(_norm(t["title"]))))
         self.db.execute("UPDATE albums SET mbid=? WHERE id=?", (mbid, album_id))
         self.db.commit()
@@ -83,7 +83,7 @@ class TrackMixin:
     @locked
     def album_tracks(self, album_id: int) -> list[dict]:
         rows = self.db.execute(
-            "SELECT id, album_id, n, side, pos, title, length, song_id FROM tracks "
+            "SELECT id, album_id, n, disc, side, pos, title, length, song_id FROM tracks "
             "WHERE album_id=? ORDER BY n", (album_id,)).fetchall()
         return [dict(r) for r in rows]
 
@@ -166,6 +166,8 @@ class Library(TrackMixin):
         self.db.executescript(SCHEMA)
         if "mbid" not in {r[1] for r in self.db.execute("PRAGMA table_info(albums)")}:
             self.db.execute("ALTER TABLE albums ADD COLUMN mbid TEXT")
+        if "disc" not in {r[1] for r in self.db.execute("PRAGMA table_info(tracks)")}:
+            self.db.execute("ALTER TABLE tracks ADD COLUMN disc INTEGER NOT NULL DEFAULT 1")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.lock = threading.RLock()
 

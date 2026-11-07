@@ -37,6 +37,15 @@ def test_parse_release_vinyl_numbers():
     assert rel["tracks"][0]["length"] == 60 and rel["tracks"][2]["length"] == 120
 
 
+def test_second_lp_sides_continue():
+    lp = lambda nums: {"position": 1, "format": "12\" Vinyl", "tracks": [{"number": x, "title": x} for x in nums]}  # noqa: E731
+    rel = parse_release({"id": "m", "media": [lp(["A1", "A2", "B1"]), {**lp(["A1", "B1", "B2"]), "position": 2}]})
+    assert [(t["disc"], t["side"], t["pos"]) for t in rel["tracks"]] == [
+        (1, "A", 1), (1, "A", 2), (1, "B", 1), (2, "C", 1), (2, "D", 1), (2, "D", 2)]
+    rel = parse_release({"id": "m", "media": [lp(["A1", "B1"]), {**lp(["C1", "D1"]), "position": 2}]})
+    assert [t["side"] for t in rel["tracks"]] == ["A", "B", "C", "D"]          # already continuing: left alone
+
+
 def test_library_tracks_and_titles(tmp_path):
     lib = Library(tmp_path)
     album = lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks())
