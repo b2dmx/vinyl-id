@@ -1,0 +1,77 @@
+# New automation: "Vinyl ID" (Music label and category).
+# Draft. Create it in the UI (Edit in YAML) once the Vinyl ID app is installed.
+#
+# What it does: the one thing music does not already cover. If a phone AirPlays to
+# the WiiM while a record plays, ask once, and put the record back on request.
+# Power, joining the WiiM and auto-off are handled by "STR-DH590 Music" (the record
+# is just Music Assistant playback), so none of that is repeated here.
+#
+# Placeholders to confirm:
+#   media_player.YOUR_WIIM, media_player.YOUR_VINYL_PLAYER, notify.mobile_app_YOUR_PHONE
+#   "Music Assistant Queue" = the WiiM's source name when Music Assistant is feeding it
+#
+# Open (decide at the hardware phase): how Music Assistant starts playing the CAST
+# line-in. Vinyl ID can only hear the record while that stream is playing.
+
+alias: Vinyl ID
+description: Asks before a phone's AirPlay takes the receiver from a playing record, and puts the record back.
+mode: restart
+triggers:
+  - trigger: state
+    entity_id: media_player.YOUR_WIIM
+    attribute: source
+    id: wiim_taken_over
+  - trigger: event
+    event_type: mobile_app_notification_action
+    event_data:
+      action: VINYL_BACK
+    id: back_tapped
+  - trigger: state
+    entity_id: media_player.YOUR_WIIM
+    to:
+      - idle
+      - paused
+      - "off"
+    for:
+      seconds: 15
+    id: airplay_ended
+conditions:
+  - condition: state
+    entity_id: binary_sensor.vinyl_id_record_playing
+    state: "on"
+actions:
+  - choose:
+      - alias: 'Something else took the WiiM: ask once'
+        conditions:
+          - condition: trigger
+            id: wiim_taken_over
+          - condition: template
+            value_template: "{{ trigger.to_state.attributes.source != 'Music Assistant Queue' }}"
+        sequence:
+          - action: notify.mobile_app_YOUR_PHONE
+            data:
+              title: Record still playing
+              message: Switch the receiver back to vinyl?
+              data:
+                tag: vinyl_takeover
+                actions:
+                  - action: VINYL_BACK
+                    title: "Yes"
+                  - action: VINYL_KEEP
+                    title: "No"
+      - alias: 'Yes tapped, or the AirPlay ended: put the WiiM back on the vinyl stream'
+        conditions:
+          - condition: trigger
+            id: [back_tapped, airplay_ended]
+        sequence:
+          - action: media_player.join
+            target:
+              entity_id: media_player.YOUR_VINYL_PLAYER
+            data:
+              group_members:
+                - media_player.YOUR_WIIM
+          - action: notify.mobile_app_YOUR_PHONE
+            data:
+              message: clear_notification
+              data:
+                tag: vinyl_takeover

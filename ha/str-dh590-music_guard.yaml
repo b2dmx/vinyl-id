@@ -1,0 +1,23 @@
+# Guard for the existing "STR-DH590 Music" automation (Music label).
+# One added condition, nothing else changes. Edit it in the UI (the three-dot menu, Edit in YAML).
+#
+# Vinyl reaches the receiver through Music Assistant like any other music, so this
+# automation already turns the receiver on, joins the WiiM and turns it off again.
+# The only change: while a record plays, the WiiM may only join the vinyl stream,
+# never some other speaker's music.
+#
+# Placeholder: media_player.YOUR_VINYL_PLAYER = the Vinyl ID player in Music Assistant.
+#
+# Where: the step "Add the WiiM (receiver input) to that speaker". Its `if:` list
+# gets this extra entry, next to the existing template condition:
+
+- alias: Not while a record plays elsewhere
+  condition: or
+  conditions:
+    - condition: state
+      entity_id: binary_sensor.vinyl_id_record_playing
+      state: "off"
+    - condition: template
+      value_template: >-
+        {{ leader == 'media_player.YOUR_VINYL_PLAYER'
+           or 'media_player.YOUR_VINYL_PLAYER' in (state_attr(leader, 'group_members') or []) }}
