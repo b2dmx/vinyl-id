@@ -37,7 +37,8 @@ env = {
     "SIGNAL_THRESHOLD_DB": str(opts.get("signal_threshold_db", -50)),
     "RECEIVER_NAME": opts.get("receiver_name", "Vinyl ID"),
     "DATA_DIR": "/data",
-    "PUBLIC_URL": f"http://{lan_ip()}:8095",
+    "WEB_PORT": "8780",
+    "PUBLIC_URL": f"http://{lan_ip()}:8780",
     "EDIT_FROM": "172.30.32.2,127.0.0.1",   # edits only through the HA sidebar (ingress)
 }
 m = mqtt_service()
