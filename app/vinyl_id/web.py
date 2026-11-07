@@ -88,6 +88,41 @@ def build(app: App) -> web.Application:
     async def art_search(req):
         return web.json_response(await app.rec.search_art(req.query.get("q", "")))
 
+    @routes.get("/api/mb/search")
+    async def mb_search(req):
+        """Pressings from MusicBrainz, to pick the exact one (vinyl first)."""
+        return web.json_response(await app.rec.search_releases(req.query.get("q", "")))
+
+    @routes.post("/api/albums/from-mb")
+    async def album_from_mb(req):
+        """Add an album with its track list (side, position, title, length) and cover."""
+        mbid = (await req.json())["mbid"]
+        rel = await app.rec.release(mbid)
+        if not rel or not rel["tracks"]:
+            raise web.HTTPBadGateway(text="MusicBrainz has no track list for that release")
+        album_id = lib.add_album_from_release(rel["artist"], rel["album"], mbid, rel["tracks"])
+        if not lib.album_has_art(album_id):
+            if data := await app.rec.front_cover(mbid):
+                lib.set_art(album_id, data, locked=False)
+        return web.json_response({"id": album_id, "tracks": len(rel["tracks"])})
+
+    @routes.get("/api/albums/{id:\\d+}/tracks")
+    async def album_tracks(req):
+        return web.json_response(lib.album_tracks(int(req.match_info["id"])))
+
+    @routes.post("/api/spin")
+    async def start_spin(req):
+        """Now spinning: {"album_id", "side" (default first), "pos" (default 1)}."""
+        b = await req.json()
+        if not app.start_spin(int(b["album_id"]), str(b.get("side", "")), int(b.get("pos", 1))):
+            raise web.HTTPNotFound(text="That album has no track list yet")
+        return web.json_response(app.spin_status())
+
+    @routes.delete("/api/spin")
+    async def end_spin(_):
+        app.end_spin()
+        return web.json_response({"ok": True})
+
     @routes.patch("/api/songs/{id:\\d+}")
     async def edit_song(req):
         body = await req.json()

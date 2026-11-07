@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import re
 import sqlite3
 import threading
 import time
@@ -25,6 +26,11 @@ CREATE TABLE IF NOT EXISTS songs (
   id INTEGER PRIMARY KEY, shazam_id TEXT UNIQUE, title TEXT NOT NULL, artist TEXT NOT NULL,
   album_id INTEGER REFERENCES albums(id), plays INTEGER NOT NULL DEFAULT 0,
   last_played REAL, created REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS tracks (
+  id INTEGER PRIMARY KEY, album_id INTEGER NOT NULL, n INTEGER NOT NULL,
+  side TEXT NOT NULL, pos INTEGER NOT NULL, title TEXT NOT NULL,
+  length REAL, song_id INTEGER);
+CREATE INDEX IF NOT EXISTS tracks_album ON tracks (album_id, n);
 CREATE TABLE IF NOT EXISTS hashes (
   hash INTEGER NOT NULL, song_id INTEGER NOT NULL, t INTEGER NOT NULL,
   PRIMARY KEY (hash, song_id, t)) WITHOUT ROWID;
@@ -50,7 +56,107 @@ class Song:
     art_file: str | None
 
 
-class Library:
+def _norm(s: str) -> str:
+    """Compare titles loosely: no case, no '(Remastered)'-style suffix, no punctuation."""
+    s = re.sub(r"[\(\[].*?[\)\]]", "", s.lower())
+    s = re.sub(r"\s-\s.*(remaster|mix|version|edit|mono|stereo).*$", "", s)
+    return re.sub(r"[^a-z0-9]+", "", s)
+
+
+class TrackMixin:
+    """Track lists for pre-loaded albums (side, position, title, length)."""
+
+    @locked
+    def add_tracks(self, album_id: int, mbid: str, tracks: list[dict]) -> None:
+        """Store (replace) an album's track list. Links to songs already learned are kept by title."""
+        old = {_norm(r["title"]): r["song_id"] for r in self.db.execute(
+            "SELECT title, song_id FROM tracks WHERE album_id=?", (album_id,)) if r["song_id"]}
+        self.db.execute("DELETE FROM tracks WHERE album_id=?", (album_id,))
+        for t in tracks:
+            self.db.execute(
+                "INSERT INTO tracks (album_id, n, side, pos, title, length, song_id) VALUES (?,?,?,?,?,?,?)",
+                (album_id, t["n"], t["side"], t["pos"], t["title"], t.get("length"),
+                 old.get(_norm(t["title"]))))
+        self.db.execute("UPDATE albums SET mbid=? WHERE id=?", (mbid, album_id))
+        self.db.commit()
+
+    @locked
+    def album_tracks(self, album_id: int) -> list[dict]:
+        rows = self.db.execute(
+            "SELECT id, album_id, n, side, pos, title, length, song_id FROM tracks "
+            "WHERE album_id=? ORDER BY n", (album_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    @locked
+    def song_for_track(self, track_id: int) -> int | None:
+        """The song row behind a track, created (and linked) the first time it's needed."""
+        t = self.db.execute(
+            "SELECT t.title, t.album_id, t.song_id, a.artist FROM tracks t "
+            "JOIN albums a ON a.id = t.album_id WHERE t.id=?", (track_id,)).fetchone()
+        if not t:
+            return None
+        if t["song_id"] and self.song(t["song_id"]):
+            return t["song_id"]
+        cur = self.db.execute(
+            "INSERT INTO songs (title, artist, album_id, created) VALUES (?,?,?,?)",
+            (t["title"], t["artist"], t["album_id"], time.time()))
+        self.db.execute("UPDATE tracks SET song_id=? WHERE id=?", (cur.lastrowid, track_id))
+        self.db.commit()
+        return cur.lastrowid
+
+    @locked
+    def track_in_album(self, album_id: int, song_id: int) -> dict | None:
+        """The track of this album that a song is (by link, else by title)."""
+        tracks = self.album_tracks(album_id)
+        for t in tracks:
+            if t["song_id"] == song_id:
+                return t
+        s = self.song(song_id)
+        if s:
+            for t in tracks:
+                if _norm(t["title"]) == _norm(s.title):
+                    return t
+        return None
+
+    @locked
+    def find_track(self, title: str, artist: str) -> dict | None:
+        """A track on any pre-loaded album matching this song (most recently played album first)."""
+        rows = self.db.execute(
+            "SELECT t.id, t.album_id, t.title, a.artist, MAX(s.last_played) lp FROM tracks t "
+            "JOIN albums a ON a.id = t.album_id LEFT JOIN songs s ON s.album_id = a.id "
+            "GROUP BY t.id ORDER BY lp DESC NULLS LAST").fetchall()
+        want, who = _norm(title), _norm(artist)
+        for r in rows:
+            have = _norm(r["artist"])
+            if _norm(r["title"]) == want and (not who or not have or who in have or have in who):
+                return next(t for t in self.album_tracks(r["album_id"]) if t["id"] == r["id"])
+        return None
+
+    @locked
+    def attach_song(self, song_id: int, track: dict) -> int:
+        """Make a song this track. Returns the song id to use (the track's own, if it had one)."""
+        row = self.db.execute("SELECT song_id FROM tracks WHERE id=?", (track["id"],)).fetchone()
+        if row and row["song_id"] and row["song_id"] != song_id and self.song(row["song_id"]):
+            return row["song_id"]
+        self.db.execute("UPDATE tracks SET song_id=? WHERE id=?", (song_id, track["id"]))
+        self.db.execute("UPDATE songs SET album_id=? WHERE id=?", (track["album_id"], song_id))
+        self._gc_albums()
+        self.db.commit()
+        return song_id
+
+    @locked
+    def add_album_from_release(self, artist: str, album: str, mbid: str, tracks: list[dict]) -> int:
+        album_id = self.add_album(artist, album)
+        self.add_tracks(album_id, mbid, tracks)
+        return album_id
+
+    @locked
+    def album_has_art(self, album_id: int) -> bool:
+        r = self.db.execute("SELECT art_file FROM albums WHERE id=?", (album_id,)).fetchone()
+        return bool(r and r[0])
+
+
+class Library(TrackMixin):
     def __init__(self, data_dir: Path) -> None:
         self.dir = data_dir
         self.art_dir = data_dir / "art"
@@ -58,6 +164,8 @@ class Library:
         self.db = sqlite3.connect(data_dir / "library.db", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        if "mbid" not in {r[1] for r in self.db.execute("PRAGMA table_info(albums)")}:
+            self.db.execute("ALTER TABLE albums ADD COLUMN mbid TEXT")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.lock = threading.RLock()
 
@@ -79,8 +187,9 @@ class Library:
         return self.db.execute("SELECT COUNT(*) FROM hashes WHERE song_id=?", (song_id,)).fetchone()[0]
 
     @locked
-    def match(self, sample: list[tuple[int, int]]) -> tuple[int, int] | None:
-        """Best (song_id, aligned hash count) for a sample, or None if not confident."""
+    def match(self, sample: list[tuple[int, int]]) -> tuple[int, int, int] | None:
+        """Best (song_id, aligned hash count, frames into the song where the sample starts),
+        or None if not confident. The position is right when the song was learned from its start."""
         if not sample:
             return None
         by_hash: dict[int, list[int]] = {}
@@ -96,14 +205,15 @@ class Library:
                     votes[(sid, (t_db - t_s) // 4)] += 1   # 4-frame (~64 ms) offset bins
         if not votes:
             return None
-        best: dict[int, int] = {}
-        for (sid, _), n in votes.items():
-            best[sid] = max(best.get(sid, 0), n)
-        ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)
-        sid, n = ranked[0]
-        runner = ranked[1][1] if len(ranked) > 1 else 0
+        best: dict[int, tuple[int, int]] = {}
+        for (sid, b), n in votes.items():
+            if n > best.get(sid, (0, 0))[0]:
+                best[sid] = (n, b)
+        ranked = sorted(best.items(), key=lambda kv: kv[1][0], reverse=True)
+        sid, (n, b) = ranked[0]
+        runner = ranked[1][1][0] if len(ranked) > 1 else 0
         if n >= MIN_MATCH and n >= MIN_RATIO * max(runner, 1):
-            return sid, n
+            return sid, n, max(0, b * 4)
         return None
 
     # --- writes ------------------------------------------------------------
@@ -159,8 +269,15 @@ class Library:
     def forget(self, song_id: int) -> None:
         self.db.execute("DELETE FROM hashes WHERE song_id=?", (song_id,))
         self.db.execute("DELETE FROM songs WHERE id=?", (song_id,))
-        self.db.execute("DELETE FROM albums WHERE id NOT IN (SELECT album_id FROM songs WHERE album_id IS NOT NULL)")
+        self.db.execute("UPDATE tracks SET song_id=NULL WHERE song_id=?", (song_id,))
+        self._gc_albums()
         self.db.commit()
+
+    def _gc_albums(self) -> None:
+        """Drop albums with no songs and no track list (pre-loaded albums stay)."""
+        self.db.execute(
+            "DELETE FROM albums WHERE id NOT IN (SELECT album_id FROM songs WHERE album_id IS NOT NULL) "
+            "AND id NOT IN (SELECT album_id FROM tracks)")
 
     # --- editing (used by the web UI) ---------------------------------------
     @locked

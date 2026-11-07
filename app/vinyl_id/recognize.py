@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
+import re
+import time
 import wave
 from dataclasses import dataclass
 
@@ -11,7 +14,7 @@ import aiohttp
 import numpy as np
 from shazamio import Shazam
 
-from .config import SAMPLE_RATE
+from .config import SAMPLE_RATE, VERSION
 
 log = logging.getLogger(__name__)
 
@@ -23,10 +26,31 @@ class Track:
     album: str = ""
     art_url: str = ""
     shazam_id: str = ""
+    offset: float | None = None   # seconds into the song where the sample started (Shazam's match offset)
 
     @property
     def key(self) -> str:
         return (self.shazam_id or f"{self.artist}|{self.title}").lower()
+
+
+def parse_release(data: dict) -> dict:
+    """A MusicBrainz release -> {mbid, artist, album, year, tracks:[{n, side, pos, title, length}]}.
+    Vinyl track numbers look like 'A1', 'B3'; for anything else each medium counts as one side."""
+    tracks, n = [], 0
+    for disc, medium in enumerate(data.get("media") or [], start=1):
+        for i, t in enumerate(medium.get("tracks") or [], start=1):
+            n += 1
+            m = re.match(r"^([A-Za-z]+)(\d+)$", (t.get("number") or "").strip())
+            side, pos = (m.group(1).upper(), int(m.group(2))) if m else (str(medium.get("position", disc)), i)
+            ms = t.get("length") or (t.get("recording") or {}).get("length")
+            tracks.append({"n": n, "side": side, "pos": pos, "title": t.get("title", ""),
+                           "length": ms / 1000 if ms else None})
+    return {
+        "mbid": data.get("id", ""), "album": data.get("title", ""),
+        "artist": "".join(c.get("name", "") + c.get("joinphrase", "")
+                          for c in data.get("artist-credit", [])),
+        "year": (data.get("date") or "")[:4], "tracks": tracks,
+    }
 
 
 def _wav(pcm: np.ndarray) -> bytes:
@@ -43,6 +67,8 @@ class Recognizer:
     def __init__(self) -> None:
         self._shazam = Shazam()
         self._http: aiohttp.ClientSession | None = None
+        self._mb_lock = asyncio.Lock()
+        self._mb_last = 0.0
 
     async def close(self) -> None:
         if self._http:
@@ -65,7 +91,10 @@ class Recognizer:
                 if m.get("title") == "Album":
                     album = m.get("text", "")
         images = t.get("images", {}) or {}
+        matches = out.get("matches") or []
+        offset = matches[0].get("offset") if matches else None
         track = Track(
+            offset=float(offset) if isinstance(offset, (int, float)) else None,
             title=t.get("title", ""),
             artist=t.get("subtitle", ""),
             album=album,
@@ -105,6 +134,50 @@ class Recognizer:
              "art": x["artworkUrl100"].replace("100x100bb", "600x600bb")}
             for x in data.get("results", []) if x.get("artworkUrl100")
         ]
+
+    # --- MusicBrainz (track lists) and Cover Art Archive ---------------------------
+    async def _mb(self, path: str, params: dict) -> dict | None:
+        """MusicBrainz allows one request per second and wants a descriptive User-Agent."""
+        async with self._mb_lock:
+            wait = 1.1 - (time.monotonic() - self._mb_last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                async with self._session().get(
+                        f"https://musicbrainz.org/ws/2/{path}", params={**params, "fmt": "json"},
+                        headers={"User-Agent": f"VinylID/{VERSION} (https://github.com/b2dmx/vinyl-id)"}) as r:
+                    return await r.json(content_type=None) if r.status == 200 else None
+            except Exception as exc:
+                log.warning("MusicBrainz lookup failed: %s", exc)
+                return None
+            finally:
+                self._mb_last = time.monotonic()
+
+    async def search_releases(self, term: str) -> list[dict]:
+        """Pressings matching a search, vinyl first, for the 'add album' picker."""
+        data = await self._mb("release", {"query": term, "limit": "25"})
+        out = []
+        for r in (data or {}).get("releases", []):
+            media = r.get("media") or []
+            fmt = ", ".join(sorted({m.get("format", "") for m in media if m.get("format")}))
+            out.append({
+                "mbid": r["id"], "album": r.get("title", ""),
+                "artist": "".join(c.get("name", "") + c.get("joinphrase", "")
+                                  for c in r.get("artist-credit", [])),
+                "year": (r.get("date") or "")[:4], "country": r.get("country", ""),
+                "format": fmt, "tracks": r.get("track-count", 0),
+                "label": next((li["label"]["name"] for li in r.get("label-info", [])
+                               if li.get("label")), ""),
+            })
+        out.sort(key=lambda x: "vinyl" not in x["format"].lower())
+        return out
+
+    async def release(self, mbid: str) -> dict | None:
+        data = await self._mb(f"release/{mbid}", {"inc": "recordings+artist-credits+media"})
+        return parse_release(data) if data else None
+
+    async def front_cover(self, mbid: str) -> bytes | None:
+        return await self.fetch(f"https://coverartarchive.org/release/{mbid}/front-500")
 
     async def _itunes_art(self, track: Track) -> str:
         """Album cover from iTunes (better match for the LP than Shazam's single art)."""
