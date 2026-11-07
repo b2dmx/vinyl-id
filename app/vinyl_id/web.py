@@ -96,11 +96,16 @@ def build(app: App) -> web.Application:
     @routes.post("/api/albums/from-mb")
     async def album_from_mb(req):
         """Add an album with its track list (side, position, title, length) and cover."""
-        mbid = (await req.json())["mbid"]
+        b = await req.json()
+        mbid = b["mbid"]
         rel = await app.rec.release(mbid)
         if not rel or not rel["tracks"]:
             raise web.HTTPBadGateway(text="MusicBrainz has no track list for that release")
-        album_id = lib.add_album_from_release(rel["artist"], rel["album"], mbid, rel["tracks"])
+        if b.get("album_id"):               # give an album you already have its track list
+            album_id = int(b["album_id"])
+            lib.add_tracks(album_id, mbid, rel["tracks"])
+        else:
+            album_id = lib.add_album_from_release(rel["artist"], rel["album"], mbid, rel["tracks"])
         if not lib.album_has_art(album_id):
             if data := await app.rec.front_cover(mbid):
                 lib.set_art(album_id, data, locked=False)

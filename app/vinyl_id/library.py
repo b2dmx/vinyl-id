@@ -287,7 +287,8 @@ class Library(TrackMixin):
         like = f"%{q}%"
         rows = self.db.execute(
             "SELECT a.id, a.artist, a.album, a.art_file IS NOT NULL has_art, a.art_locked, "
-            "COUNT(s.id) songs, MAX(s.last_played) last_played FROM albums a "
+            "COUNT(s.id) songs, MAX(s.last_played) last_played, "
+            "(SELECT COUNT(*) FROM tracks t WHERE t.album_id = a.id) tracks FROM albums a "
             "LEFT JOIN songs s ON s.album_id = a.id "
             "WHERE a.artist LIKE ? OR a.album LIKE ? GROUP BY a.id ORDER BY last_played DESC NULLS LAST",
             (like, like)).fetchall()

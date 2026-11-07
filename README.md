@@ -29,7 +29,7 @@ Needs Home Assistant with the Mosquitto broker.
 1. Add the repository, install **Vinyl ID**, and pick an **Audio source**: Sendspin, AirPlay or Stream.
 2. Start it, then open **Vinyl ID** in the sidebar.
 
-Docker: fill in `docker-compose.yml`, then run `docker compose up -d --build`.
+**On a NAS or server instead:** fill in `docker-compose.yml` (your MQTT broker and login, `PUBLIC_URL`), then run `docker compose up -d --build`. Home Assistant finds it through MQTT and the same entities appear. Open `http://<your-nas>:8095` for the library page.
 
 ## Onboarding
 
@@ -41,6 +41,7 @@ Drop the needle. **Record Playing** turns on and **Now Playing** shows the song.
 - **Learn my records** is on by default. Turn it off to always use Shazam.
 - Covers you set are never replaced automatically.
 - Songs that run together not picked up? Lower `RECHECK_SECONDS`.
+- Space: a cover is about 50-150 KB and a learned song about 0.2 MB, so 1,000 songs is roughly 250 MB. It all lives in the data folder.
 - Example automations are in [ha](ha).
 
 ---
