@@ -12,46 +12,36 @@
   <a href="https://ko-fi.com/goobis2dmx"><img src="https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=kofi&logoColor=white" alt="Support on Ko-fi"></a>
 </p>
 
-A Home Assistant app. It listens to your record player's line feed (for example from an Apollo CAST PRO-1), shows the song, artist, album and cover in Home Assistant, and learns your records so replays are identified locally.
+A Home Assistant app that listens to your record player's line feed and shows the song, artist, album and cover.
 
 ## What it does
 
-- **Identifies the song** with Shazam the first time, then from its own library after that.
-- **Learns your records.** About 0.2 MB per song, and a wrong guess never sticks.
-- **Shows the cover** in Home Assistant and on displays such as the Apollo M-1.
-- **Runs locally.** Once learned, replays need no internet.
+- **Identifies songs** with Shazam once, then from its own library.
+- **Learns your records**, so replays work offline.
+- **Shows the cover** in Home Assistant and on displays.
 
 ## Installation
 
-Needs Home Assistant with the Mosquitto broker, and a way to send the record player's audio to it.
+Needs Home Assistant with the Mosquitto broker.
 
 [![Add repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fb2dmx%2Fvinyl-id)
 
-1. Add the repository (button above), install **Vinyl ID**, and start it. It uses your Mosquitto broker automatically.
-2. Choose an **Audio source** on the Configuration tab:
-   - **Sendspin**: shows up in Music Assistant as a player.
-   - **AirPlay**: shows up as an AirPlay speaker.
-   - **Stream**: reads a stream address directly.
+1. Add the repository, install **Vinyl ID**, and pick an **Audio source**: Sendspin, AirPlay or Stream.
+2. Start it, then open **Vinyl ID** in the sidebar.
 
-Docker (NAS or any server): fill in `docker-compose.yml` (broker, login, `AUDIO_SOURCE`), then run `docker compose up -d --build`.
+Docker: fill in `docker-compose.yml`, then run `docker compose up -d --build`.
 
 ## Onboarding
 
-Open **Vinyl ID** in the Home Assistant sidebar, then drop the needle.
-
-- **Record Playing** turns on a few seconds after the needle drops, and off after 45 s of silence. Flipping a side doesn't count as stopping.
-- **Now Playing** shows the song, with artist, album, art URL and source (`local`, `shazam`, `manual` or `unknown`) as attributes.
-- **Album Art**, **Library Size**, **Forget Current Song** and **Input Level** round out the entities.
-- Unknown record? Name it in the sidebar and Vinyl ID learns it from what it just heard.
+Drop the needle. **Record Playing** turns on and **Now Playing** shows the song. If Shazam doesn't know it, name it in the sidebar and Vinyl ID learns it.
 
 ## Tips
 
-- Play a quiet record, watch **Input Level**, and set the signal threshold about 10 dB below the quiet parts.
-- **Learn my records** is on by default. Turn it off to always use Shazam; covers and edits are still saved.
-- Covers you set are locked and never replaced automatically.
-- Songs that run straight into each other (live albums, medleys) not picked up? Lower `RECHECK_SECONDS`.
-- Vinyl ID's speaker is silent: it only listens. Its data folder is included in Home Assistant backups.
-- Example automations to merge into your own are in [ha](ha).
+- **Silence level:** **Input Level** shows how loud the signal is. If quiet passages count as silence, set the signal threshold a little below them.
+- **Learn my records** is on by default. Turn it off to always use Shazam.
+- Covers you set are never replaced automatically.
+- Songs that run together not picked up? Lower `RECHECK_SECONDS`.
+- Example automations are in [ha](ha).
 
 ---
 
