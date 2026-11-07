@@ -1,0 +1,27 @@
+services:
+  vinyl-id:
+    build: ./app
+    container_name: vinyl-id
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./data:/data          # library, fingerprints and saved covers
+    environment:
+      # How the record reaches Vinyl ID:
+      #   sendspin → appears in Music Assistant as a Sendspin player
+      #   airplay  → appears in Music Assistant as an AirPlay speaker
+      #   stream   → reads AUDIO_INPUT directly (stream URL, device or file)
+      AUDIO_SOURCE: sendspin
+      RECEIVER_NAME: Vinyl ID
+      AUDIO_INPUT: ""          # only used with AUDIO_SOURCE: stream
+      # MQTT broker (Mosquitto add-on on the HA Green)
+      MQTT_HOST: homeassistant.local   # your broker's address
+      MQTT_PORT: 1883
+      MQTT_USER: vinyl-id
+      MQTT_PASSWORD: change-me
+      # Library page + cover URLs for HA
+      WEB_PORT: 8095
+      PUBLIC_URL: http://your-server.local:8095   # this machine's address, as HA sees it
+      # Tune after a test record using the "Input Level" sensor in HA
+      SIGNAL_THRESHOLD_DB: -50
+      TZ: America/New_York
