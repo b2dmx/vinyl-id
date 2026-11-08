@@ -19,6 +19,7 @@ A Home Assistant app that listens to your record player's line feed and shows th
 - **Identifies songs** with Shazam once, then from its own library.
 - **Learns your records**, so replays work offline.
 - **Shows the cover** in Home Assistant and on displays.
+- **Follows an album.** Add it from MusicBrainz (tracks, sides, cover), pick **Now spinning**, and it knows the track, the side and where you are in it, flipping to side B on its own.
 
 ## Installation
 
@@ -48,6 +49,6 @@ Drop the needle. **Record Playing** turns on and **Now Playing** shows the song.
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.4.2 by Goobis<br>
+  Vinyl ID v0.4.3 by Goobis<br>
   AI was used to help develop this application
 </p>

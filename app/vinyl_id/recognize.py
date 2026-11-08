@@ -17,6 +17,7 @@ from shazamio import Shazam
 from .config import SAMPLE_RATE, VERSION
 
 log = logging.getLogger(__name__)
+_STOP = {"a", "an", "and", "the", "of", "in", "on", "to", "for", "at", "by", "is", "it"}   # MusicBrainz ignores these
 
 
 @dataclass
@@ -168,6 +169,10 @@ class Recognizer:
 
     async def search_releases(self, term: str) -> list[dict]:
         """Pressings matching a search, vinyl first, for the 'add album' picker."""
+        if ":" not in term:      # plain words: every word must be in the album or the artist
+            words = [w.replace('"', "") for w in term.split() if w.replace('"', "")]
+            words = [w for w in words if w.lower() not in _STOP] or words
+            term = " AND ".join(f'(release:"{w}" OR artist:"{w}")' for w in words) or term
         data = await self._mb("release", {"query": term, "limit": "25"})
         out = []
         for r in (data or {}).get("releases", []):
