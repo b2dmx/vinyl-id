@@ -19,6 +19,7 @@ class Publisher:
         self.s = s
         self.t = s.base_topic
         self.on_forget = on_forget
+        self._last: dict[str, tuple[str | bytes, bool]] = {}
         self.c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="vinyl-id")
         if s.mqtt_user:
             self.c.username_pw_set(s.mqtt_user, s.mqtt_password)
@@ -72,15 +73,29 @@ class Publisher:
         for topic, cfg in entities.items():
             self.c.publish(topic, json.dumps({**cfg, **common}), retain=True)
         self.c.subscribe(f"{t}/forget")
+        self.c.subscribe(f"{p}/status")      # HA's birth message: it restarted, so send state again
         self.c.publish(f"{t}/status", "online", retain=True)
+        self._resend()
+
+    def _resend(self) -> None:
+        """Publishes made before the connection was up are dropped, so keep the last
+        value of each topic and send them all again on every (re)connect."""
+        for topic, (payload, retain) in list(self._last.items()):
+            self.c.publish(topic, payload, retain=retain)
+
+    def _put(self, topic: str, payload: str | bytes, retain: bool = True) -> None:
+        self._last[topic] = (payload, retain)
+        self.c.publish(topic, payload, retain=retain)
 
     def _on_message(self, _c, _u, msg) -> None:
         if msg.topic == f"{self.t}/forget":
             self.on_forget()
+        elif msg.topic == f"{self.s.discovery_prefix}/status" and msg.payload == b"online":
+            self._on_connect()
 
     # --- state -----------------------------------------------------------
     def playing(self, on: bool) -> None:
-        self.c.publish(f"{self.t}/playing", "ON" if on else "OFF", retain=True)
+        self._put(f"{self.t}/playing", "ON" if on else "OFF")
 
     def track(self, info: dict | None, art: bytes | None = None) -> None:
         """info: title, artist, album, art_url, source ('local' or 'shazam')."""
@@ -88,12 +103,12 @@ class Publisher:
         if info:
             payload |= info
             payload["recognized_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        self.c.publish(f"{self.t}/track", json.dumps(payload), retain=True)
+        self._put(f"{self.t}/track", json.dumps(payload))
         if art:
-            self.c.publish(f"{self.t}/art", art, retain=True)
+            self._put(f"{self.t}/art", art)
 
     def library(self, n: int) -> None:
-        self.c.publish(f"{self.t}/library", str(n), retain=True)
+        self._put(f"{self.t}/library", str(n))
 
     def level(self, db: float) -> None:
-        self.c.publish(f"{self.t}/level", f"{db:.0f}")
+        self._put(f"{self.t}/level", f"{db:.0f}", retain=False)
