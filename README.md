@@ -45,6 +45,10 @@ Drop the needle. **Record Playing** turns on and **Now Playing** shows the song.
 - Space: a cover is about 50-150 KB and a learned song about 0.2 MB, so 1,000 songs is roughly 250 MB. It all lives in the data folder.
 - Example automations are in [ha](ha).
 
+## License
+
+The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`, plus `app/icon.png`, `app/logo.png` and `app/vinyl_id/ui/logo.svg`) are © Goobis, all rights reserved. They are not covered by the MIT license, so please don't reuse them without permission.
+
 ---
 
 <p align="center">
