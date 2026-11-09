@@ -22,6 +22,8 @@ services:
       # Library page + cover URLs for HA
       WEB_PORT: 8095
       PUBLIC_URL: http://your-server.local:8095   # this machine's address, as HA sees it
+      # Who may change the library (comma-separated IPs). Blank = anyone on your network.
+      EDIT_FROM: ""
       # Tune after a test record using the "Input Level" sensor in HA
       SIGNAL_THRESHOLD_DB: -50
       TZ: America/New_York

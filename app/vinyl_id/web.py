@@ -17,6 +17,12 @@ log = logging.getLogger(__name__)
 UI_DIR = Path(__file__).parent / "ui"
 
 
+def is_image(data: bytes | None) -> bool:
+    """JPEG, PNG, GIF or WebP, judged by the first bytes."""
+    return bool(data) and (data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n"
+                           or data[:4] == b"GIF8" or (data[:4] == b"RIFF" and data[8:12] == b"WEBP"))
+
+
 def build(app: App) -> web.Application:
     lib, routes = app.lib, web.RouteTableDef()
 
@@ -77,8 +83,11 @@ def build(app: App) -> web.Application:
             field = await (await req.multipart()).next()
             data = await field.read(decode=False) if field else None
         else:
-            data = await app.rec.fetch((await req.json())["url"])
-        if not data:
+            url = str((await req.json())["url"])
+            if not url.lower().startswith(("http://", "https://")):
+                raise web.HTTPBadRequest(text="Not a web address")
+            data = await app.rec.fetch(url)
+        if not is_image(data):        # also stops the picker being used to read other web addresses
             raise web.HTTPBadRequest(text="No image")
         lib.set_art(album_id, bytes(data), locked=True)   # locked: never auto-replaced
         app.refresh_now()
@@ -140,6 +149,14 @@ def build(app: App) -> web.Application:
         app.forget(int(req.match_info["id"]))
         return web.json_response({"ok": True})
 
+    @web.middleware
+    async def bad_request(req, handler):
+        """A missing field or malformed body is the caller's mistake (400), not a server error."""
+        try:
+            return await handler(req)
+        except (KeyError, ValueError, TypeError, AttributeError) as exc:
+            raise web.HTTPBadRequest(text=f"Bad request: {exc!r}") from exc
+
     allowed = {ip.strip() for ip in app.s.edit_from.split(",") if ip.strip()}
 
     @web.middleware
@@ -149,7 +166,7 @@ def build(app: App) -> web.Application:
             raise web.HTTPForbidden(text="Edit from the Vinyl ID page in Home Assistant")
         return await handler(req)
 
-    wa = web.Application(client_max_size=10 * 1024 * 1024, middlewares=[edits_guard])
+    wa = web.Application(client_max_size=10 * 1024 * 1024, middlewares=[edits_guard, bad_request])
     wa.add_routes(routes)
     if UI_DIR.exists():
         wa.router.add_get("/", lambda _: web.FileResponse(UI_DIR / "index.html"))

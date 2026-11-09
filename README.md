@@ -30,7 +30,7 @@ Needs Home Assistant with the Mosquitto broker.
 1. Add the repository, install **Vinyl ID**, and pick an **Audio source**: Sendspin, AirPlay or Stream.
 2. Start it, then open **Vinyl ID** in the sidebar.
 
-**On a NAS or server instead:** fill in `docker-compose.yml` (your MQTT broker and login, `PUBLIC_URL`), then run `docker compose up -d --build`. Home Assistant finds it through MQTT and the same entities appear. Open `http://<your-nas>:8095` for the library page.
+**On a NAS or server instead:** fill in `docker-compose.yml` (your MQTT broker and login, `PUBLIC_URL`), then run `docker compose up -d --build`. Home Assistant finds it through MQTT and the same entities appear. Open `http://<your-nas>:8095` for the library page. Anyone on your network can open it and, unless you set `EDIT_FROM` to the addresses allowed to make changes, edit your library.
 
 ## Onboarding
 
@@ -49,6 +49,6 @@ Drop the needle. **Record Playing** turns on and **Now Playing** shows the song.
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.4.3 by Goobis<br>
+  Vinyl ID v0.4.4 by Goobis<br>
   AI was used to help develop this application
 </p>
