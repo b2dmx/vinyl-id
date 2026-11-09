@@ -7,6 +7,8 @@ until the next gap between songs).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 SIDE_FLIP_WINDOW = 300.0     # a restart this soon after a side ends = the next side
 EXPIRE_AFTER = 1800.0        # stopped this long = the record is off the turntable
 LENGTH_GRACE = 3.0           # seconds past a track's listed length before moving on
@@ -21,6 +23,7 @@ class Spin:
         self.start = start
         self.auto = auto                 # attached by itself after Shazam, not picked by hand
         self.stopped_at: float | None = None
+        self.at_side_end = False         # the last stop was at the end of a side
         self.mismatch: dict | None = None   # a song from outside this album was heard
 
     @property
@@ -79,8 +82,6 @@ class Spin:
         self.at_side_end = self.next_in_side() is None
         self.stopped_at, self.start = now, None
 
-    at_side_end = False
-
     def jump(self, i: int, start: float | None) -> None:
         self.i, self.start = i, start
 
@@ -98,5 +99,4 @@ class Spin:
 
 
 def _iso(epoch: float) -> str:
-    from datetime import datetime, timezone
     return datetime.fromtimestamp(epoch, timezone.utc).isoformat(timespec="seconds")

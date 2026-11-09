@@ -5,13 +5,12 @@ from __future__ import annotations
 import functools
 import re
 import sqlite3
+import subprocess
 import threading
 import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-
-from .fingerprint import FRAMES_PER_SECOND
 
 MAX_HASHES_PER_SONG = 20000
 MIN_MATCH = 40          # aligned hashes needed to trust a local match
@@ -25,7 +24,7 @@ CREATE TABLE IF NOT EXISTS albums (
 CREATE TABLE IF NOT EXISTS songs (
   id INTEGER PRIMARY KEY, shazam_id TEXT UNIQUE, title TEXT NOT NULL, artist TEXT NOT NULL,
   album_id INTEGER REFERENCES albums(id), plays INTEGER NOT NULL DEFAULT 0,
-  last_played REAL, created REAL NOT NULL);
+  last_played REAL, created REAL NOT NULL, hashes INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS tracks (
   id INTEGER PRIMARY KEY, album_id INTEGER NOT NULL, n INTEGER NOT NULL,
   disc INTEGER NOT NULL DEFAULT 1, side TEXT NOT NULL, pos INTEGER NOT NULL, title TEXT NOT NULL,
@@ -35,6 +34,21 @@ CREATE TABLE IF NOT EXISTS hashes (
   hash INTEGER NOT NULL, song_id INTEGER NOT NULL, t INTEGER NOT NULL,
   PRIMARY KEY (hash, song_id, t)) WITHOUT ROWID;
 """
+
+
+def as_jpeg(data: bytes) -> bytes:
+    """Covers are stored and served as JPEG, the one format every display reads.
+    PNG, WebP and GIF are converted with ffmpeg; if that fails the image is kept as it is."""
+    if data[:3] == b"\xff\xd8\xff":
+        return data
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-frames:v", "1",
+             "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "3", "pipe:1"],
+            input=data, capture_output=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return data
+    return out.stdout if out.returncode == 0 and out.stdout[:3] == b"\xff\xd8\xff" else data
 
 
 def locked(fn):
@@ -129,7 +143,9 @@ class TrackMixin:
         for r in rows:
             have = _norm(r["artist"])
             if _norm(r["title"]) == want and (not who or not have or who in have or have in who):
-                return next(t for t in self.album_tracks(r["album_id"]) if t["id"] == r["id"])
+                return dict(self.db.execute(
+                    "SELECT id, album_id, n, disc, side, pos, title, length, song_id FROM tracks WHERE id=?",
+                    (r["id"],)).fetchone())
         return None
 
     @locked
@@ -164,12 +180,25 @@ class Library(TrackMixin):
         self.db = sqlite3.connect(data_dir / "library.db", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
-        if "mbid" not in {r[1] for r in self.db.execute("PRAGMA table_info(albums)")}:
-            self.db.execute("ALTER TABLE albums ADD COLUMN mbid TEXT")
-        if "disc" not in {r[1] for r in self.db.execute("PRAGMA table_info(tracks)")}:
-            self.db.execute("ALTER TABLE tracks ADD COLUMN disc INTEGER NOT NULL DEFAULT 1")
         self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA synchronous=NORMAL")   # safe with WAL, far fewer disk flushes
+        self._migrate()
         self.lock = threading.RLock()
+
+    def _columns(self, table: str) -> set[str]:
+        return {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
+
+    def _migrate(self) -> None:
+        """Columns added after the first release."""
+        if "mbid" not in self._columns("albums"):
+            self.db.execute("ALTER TABLE albums ADD COLUMN mbid TEXT")
+        if "disc" not in self._columns("tracks"):
+            self.db.execute("ALTER TABLE tracks ADD COLUMN disc INTEGER NOT NULL DEFAULT 1")
+        if "hashes" not in self._columns("songs"):   # a kept count: counting the rows scans every song's hashes
+            self.db.execute("ALTER TABLE songs ADD COLUMN hashes INTEGER NOT NULL DEFAULT 0")
+            counts = self.db.execute("SELECT COUNT(*), song_id FROM hashes GROUP BY song_id").fetchall()
+            self.db.executemany("UPDATE songs SET hashes=? WHERE id=?", [tuple(c) for c in counts])
+        self.db.commit()
 
     # --- lookups -----------------------------------------------------------
     @locked
@@ -186,7 +215,8 @@ class Library(TrackMixin):
 
     @locked
     def hash_count(self, song_id: int) -> int:
-        return self.db.execute("SELECT COUNT(*) FROM hashes WHERE song_id=?", (song_id,)).fetchone()[0]
+        r = self.db.execute("SELECT hashes FROM songs WHERE id=?", (song_id,)).fetchone()
+        return r[0] if r else 0
 
     @locked
     def match(self, sample: list[tuple[int, int]]) -> tuple[int, int, int] | None:
@@ -245,7 +275,9 @@ class Library(TrackMixin):
         room = MAX_HASHES_PER_SONG - self.hash_count(song_id)
         if room <= 0 or not hs:
             return
-        self.db.executemany("INSERT OR IGNORE INTO hashes VALUES (?,?,?)", [(h, song_id, t + t0) for h, t in hs[:room]])
+        cur = self.db.executemany("INSERT OR IGNORE INTO hashes VALUES (?,?,?)",
+                                  [(h, song_id, t + t0) for h, t in hs[:room]])
+        self.db.execute("UPDATE songs SET hashes = hashes + ? WHERE id=?", (cur.rowcount, song_id))
         self.db.commit()
 
     @locked
@@ -256,7 +288,7 @@ class Library(TrackMixin):
     @locked
     def set_art(self, album_id: int, data: bytes, locked: bool) -> None:
         name = f"{album_id}.jpg"
-        (self.art_dir / name).write_bytes(data)
+        (self.art_dir / name).write_bytes(as_jpeg(data))
         self.db.execute("UPDATE albums SET art_file=?, art_locked=? WHERE id=?", (name, int(locked), album_id))
         self.db.commit()
 
@@ -266,6 +298,13 @@ class Library(TrackMixin):
         if r and r[0] and (self.art_dir / r[0]).exists():
             return (self.art_dir / r[0]).read_bytes()
         return None
+
+    def art_version(self, art_file: str) -> int:
+        """Changes only when the cover does, so displays re-download it only then."""
+        try:
+            return int((self.art_dir / art_file).stat().st_mtime)
+        except OSError:
+            return 0
 
     @locked
     def forget(self, song_id: int) -> None:
@@ -293,6 +332,11 @@ class Library(TrackMixin):
             "WHERE a.artist LIKE ? OR a.album LIKE ? GROUP BY a.id ORDER BY last_played DESC NULLS LAST",
             (like, like)).fetchall()
         return [dict(r) for r in rows]
+
+    @locked
+    def album(self, album_id: int) -> dict | None:
+        r = self.db.execute("SELECT id, artist, album FROM albums WHERE id=?", (album_id,)).fetchone()
+        return dict(r) if r else None
 
     @locked
     def album_songs(self, album_id: int) -> list[dict]:
@@ -328,7 +372,3 @@ class Library(TrackMixin):
     def edit_song(self, song_id: int, title: str, artist: str) -> None:
         self.db.execute("UPDATE songs SET title=?, artist=? WHERE id=?", (title, artist, song_id))
         self.db.commit()
-
-
-def seconds_to_frames(sec: float) -> int:
-    return int(sec * FRAMES_PER_SECOND)

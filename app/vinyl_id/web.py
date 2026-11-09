@@ -1,4 +1,4 @@
-"""Small local web API (and, later, the library UI) for fixing songs and covers."""
+"""The library page and its small local web API, for fixing songs and covers."""
 
 from __future__ import annotations
 
@@ -48,8 +48,7 @@ def build(app: App) -> web.Application:
     async def add_song(req):
         b = await req.json()
         album_id = int(req.match_info["id"])
-        artist = b.get("artist", "").strip() or next(
-            (a["artist"] for a in lib.albums() if a["id"] == album_id), "")
+        artist = b.get("artist", "").strip() or (lib.album(album_id) or {}).get("artist", "")
         return web.json_response({"id": lib.add_song(album_id, b["title"].strip(), artist)})
 
     @routes.get("/api/albums")

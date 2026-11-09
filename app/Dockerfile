@@ -16,5 +16,5 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p /data
 
 VOLUME /data
-EXPOSE 8095
+EXPOSE 8095 8780
 ENTRYPOINT ["/entrypoint.sh"]

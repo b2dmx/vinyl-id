@@ -32,12 +32,18 @@ class Publisher:
         self.c.loop_start()
 
     def stop(self) -> None:
-        self.c.publish(f"{self.t}/status", "offline", retain=True)
-        self.c.loop_stop()
+        try:   # let "offline" leave before the connection closes
+            self.c.publish(f"{self.t}/status", "offline", retain=True).wait_for_publish(2)
+        except (RuntimeError, ValueError):   # never connected
+            pass
         self.c.disconnect()
+        self.c.loop_stop()
 
     # --- discovery -------------------------------------------------------
-    def _on_connect(self, *_args) -> None:
+    def _on_connect(self, _c=None, _u=None, _flags=None, reason=None, _props=None) -> None:
+        if reason is not None and reason.is_failure:   # wrong login, broker refusing, ...
+            log.error("MQTT %s:%s refused the connection: %s", self.s.mqtt_host, self.s.mqtt_port, reason)
+            return
         log.info("Connected to MQTT %s:%s", self.s.mqtt_host, self.s.mqtt_port)
         dev = {
             "identifiers": ["vinyl_id"], "name": APP_NAME, "manufacturer": "Goobis",
@@ -98,14 +104,15 @@ class Publisher:
         self._put(f"{self.t}/playing", "ON" if on else "OFF")
 
     def track(self, info: dict | None, art: bytes | None = None) -> None:
-        """info: title, artist, album, art_url, source ('local' or 'shazam')."""
+        """info: title, artist, album, art_url, source ('local', 'shazam', 'spin', 'manual')."""
         payload = {"title": "None", "artist": "", "album": "", "art_url": "", "source": ""}
         if info:
             payload |= info
             payload["recognized_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         self._put(f"{self.t}/track", json.dumps(payload))
-        if art:
-            self._put(f"{self.t}/art", art)
+        topic = f"{self.t}/art"
+        if art and self._last.get(topic, (None,))[0] != art:   # same cover: don't send the image again
+            self._put(topic, art)
 
     def library(self, n: int) -> None:
         self._put(f"{self.t}/library", str(n))

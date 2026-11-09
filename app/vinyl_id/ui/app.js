@@ -250,16 +250,19 @@ function addAlbumDialog(forId = null, preset = "") {
 }
 
 // ---- wiring -------------------------------------------------------------------------------
+// what the Now Playing and Now spinning cards are drawn from
+const sig = (s) => JSON.stringify([s.now && [s.now.id, s.now.title, s.now.track_started_at, s.now.source, s.now.spin_mismatch], s.playing, s.unknown, s.spin && [s.spin.index, s.spin.album_id, s.spin.mismatch]]);
+
 async function refresh() {
   try {
     const s = await api("status");
-    const changed = JSON.stringify([s.now && [s.now.id, s.now.title, s.now.track_started_at, s.now.source, s.now.spin_mismatch], s.playing, s.unknown, s.spin && [s.spin.index, s.spin.album_id, s.spin.mismatch]])
-      !== JSON.stringify(status && [status.now && [status.now.id, status.now.title, status.now.track_started_at, status.now.source, status.now.spin_mismatch], status.playing, status.unknown, status.spin && [status.spin.index, status.spin.album_id, status.spin.mismatch]]);
+    const changed = !status || sig(s) !== sig(status);
+    const grew = status && s.library !== status.library;
     status = s;
     $("#sig").textContent = s.signature;
     $("#ai").textContent = s.ai_note;
     if (changed || !$("#now").firstChild) { renderNow(); renderSpin(); }
-    if (!albums.length && !query) loadAlbums();
+    if (grew) loadAlbums();   // a new record was learned: show it without a reload
   } catch (e) { /* the server restarting: try again next tick */ }
 }
 

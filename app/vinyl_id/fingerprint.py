@@ -8,14 +8,17 @@ from __future__ import annotations
 
 import numpy as np
 
+from .config import SAMPLE_RATE
+
 N_FFT = 1024
-HOP = 256           # 16 ms per frame at 16 kHz
+HOP = 256           # 16 ms per frame
 FREQ_BINS = 512     # bins kept (0–8 kHz)
 PEAK_T, PEAK_F = 10, 12   # neighbourhood half-size for a local maximum
 FAN_OUT = 5
 PEAKS_PER_SECOND = 10  # keep only the strongest peaks: smaller library, ignores surface noise
 MAX_DT = 63
-FRAMES_PER_SECOND = 16000 / HOP
+FRAMES_PER_SECOND = SAMPLE_RATE / HOP
+_WINDOW = np.hanning(N_FFT).astype(np.float32)   # float32 throughout: half the memory on long clips
 
 
 def _spectrogram(pcm: np.ndarray) -> np.ndarray:
@@ -23,7 +26,7 @@ def _spectrogram(pcm: np.ndarray) -> np.ndarray:
     if len(x) < N_FFT:
         return np.zeros((0, FREQ_BINS), np.float32)
     frames = np.lib.stride_tricks.sliding_window_view(x, N_FFT)[::HOP]
-    spec = np.abs(np.fft.rfft(frames * np.hanning(N_FFT), axis=1))[:, :FREQ_BINS]
+    spec = np.abs(np.fft.rfft(frames * _WINDOW, axis=1))[:, :FREQ_BINS]
     return 20 * np.log10(spec + 1e-6)
 
 
@@ -68,5 +71,3 @@ def hashes(pcm: np.ndarray) -> list[tuple[int, int]]:
             out.append(((int(f1) << 15) | (int(f_idx[j]) << 6) | int(dt), int(t1)))
             taken += 1
     return out
-
-

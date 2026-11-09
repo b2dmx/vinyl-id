@@ -116,3 +116,31 @@ def test_learning_off_always_uses_shazam(tmp_path, monkeypatch):
     app = _run(tmp_path, monkeypatch, shazam, learn=False)
     assert all(src == "shazam" for _, src in filter(None, app.pub.tracks))
     assert app.lib.hash_count(1) == 0 and len(calls) >= 4
+
+
+def test_answer_for_a_song_that_already_ended_is_dropped(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_mod, "Publisher", FakePub)
+    app = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x"))
+    app.det.playing = True
+
+    async def slow_shazam(self, pcm):
+        app._schedule(6)                           # a track change arrives while Shazam is thinking
+        return Track("Old Song", "Artist", "LP", "", "shz9")
+
+    monkeypatch.setattr(main_mod.Recognizer, "identify", slow_shazam)
+    asyncio.run(app._identify(fake_song(3, 12), 0))
+    assert app.current is None and app.pub.tracks == [] and not app.busy
+
+
+def test_failed_identification_retries_later(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_mod, "Publisher", FakePub)
+    app = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x", retry_seconds=30))
+    app.clock = FakeClock()
+    app.det.playing = True
+
+    async def broken(self, pcm):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(main_mod.Recognizer, "identify", broken)
+    asyncio.run(app._identify(fake_song(3, 12), 0))
+    assert app.next_check == 30 and not app.busy

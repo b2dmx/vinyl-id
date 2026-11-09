@@ -55,3 +55,28 @@ def test_forget_and_album_art(tmp_path):
     lib.forget(sid)
     lib.forget(sid2)
     assert lib.size() == 0 and lib.albums() == []
+
+
+def _rows(lib, sid):
+    return lib.db.execute("SELECT COUNT(*) FROM hashes WHERE song_id=?", (sid,)).fetchone()[0]
+
+
+def test_hash_count_is_kept_in_step(tmp_path):
+    lib = Library(tmp_path)
+    sid, _ = lib.upsert("A", "B", "C", "x1")
+    hs = hashes(fake_song(4, 30))
+    lib.learn(sid, hs, 0)
+    lib.learn(sid, hs, 0)                      # the same audio again adds nothing
+    assert lib.hash_count(sid) == _rows(lib, sid) > 0
+    assert lib.hash_count(999) == 0
+
+
+def test_old_library_gets_its_hash_counts(tmp_path):
+    lib = Library(tmp_path)
+    sid, _ = lib.upsert("A", "B", "C", "x1")
+    lib.learn(sid, hashes(fake_song(4, 30)), 0)
+    n = lib.hash_count(sid)
+    lib.db.execute("ALTER TABLE songs DROP COLUMN hashes")   # as saved by 0.4.4 and earlier
+    lib.db.commit()
+    lib.db.close()
+    assert Library(tmp_path).hash_count(sid) == n

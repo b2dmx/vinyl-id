@@ -29,9 +29,15 @@ class Track:
     shazam_id: str = ""
     offset: float | None = None   # seconds into the song where the sample started (Shazam's match offset)
 
-    @property
-    def key(self) -> str:
-        return (self.shazam_id or f"{self.artist}|{self.title}").lower()
+
+def _credit(x: dict) -> str:
+    """MusicBrainz artist credit ('A feat. B') as one string."""
+    return "".join(c.get("name", "") + c.get("joinphrase", "") for c in x.get("artist-credit", []))
+
+
+def _big(itunes_album: dict) -> str:
+    """iTunes hands out a 100 px cover; the same address serves 600 px."""
+    return itunes_album["artworkUrl100"].replace("100x100bb", "600x600bb")
 
 
 def _shift(side: str, by: int) -> str:
@@ -61,8 +67,7 @@ def parse_release(data: dict) -> dict:
         used += [s for s in dict.fromkeys(x["side"] for x in tracks if x["disc"] == disc)]
     return {
         "mbid": data.get("id", ""), "album": data.get("title", ""),
-        "artist": "".join(c.get("name", "") + c.get("joinphrase", "")
-                          for c in data.get("artist-credit", [])),
+        "artist": _credit(data),
         "year": (data.get("date") or "")[:4], "tracks": tracks,
     }
 
@@ -115,9 +120,7 @@ class Recognizer:
             art_url=images.get("coverarthq") or images.get("coverart") or "",
             shazam_id=str(t.get("key", "")),
         )
-        better = await self._itunes_art(track)
-        if better:
-            track.art_url = better
+        track.art_url = await self._itunes_art(track) or track.art_url
         return track
 
     def _session(self) -> aiohttp.ClientSession:
@@ -135,19 +138,20 @@ class Recognizer:
 
     async def search_art(self, term: str) -> list[dict]:
         """Album cover candidates for the 'fix art' picker."""
-        params = {"term": term, "entity": "album", "limit": "12"}
+        return [{"album": x.get("collectionName", ""), "artist": x.get("artistName", ""),
+                 "year": (x.get("releaseDate") or "")[:4], "art": _big(x)}
+                for x in await self._itunes_albums(term, 12)]
+
+    async def _itunes_albums(self, term: str, limit: int) -> list[dict]:
+        """iTunes albums that have a cover."""
+        params = {"term": term, "entity": "album", "limit": str(limit)}
         try:
             async with self._session().get("https://itunes.apple.com/search", params=params) as r:
                 data = await r.json(content_type=None)
         except Exception as exc:
-            log.warning("Art search failed: %s", exc)
+            log.warning("iTunes search failed: %s", exc)
             return []
-        return [
-            {"album": x.get("collectionName", ""), "artist": x.get("artistName", ""),
-             "year": (x.get("releaseDate") or "")[:4],
-             "art": x["artworkUrl100"].replace("100x100bb", "600x600bb")}
-            for x in data.get("results", []) if x.get("artworkUrl100")
-        ]
+        return [x for x in data.get("results", []) if x.get("artworkUrl100")]
 
     # --- MusicBrainz (track lists) and Cover Art Archive ---------------------------
     async def _mb(self, path: str, params: dict) -> dict | None:
@@ -170,7 +174,7 @@ class Recognizer:
     async def search_releases(self, term: str) -> list[dict]:
         """Pressings matching a search, vinyl first, for the 'add album' picker."""
         if ":" not in term:      # plain words: every word must be in the album or the artist
-            words = [w.replace('"', "") for w in term.split() if w.replace('"', "")]
+            words = [w for w in (re.sub(r'["\\]', "", w) for w in term.split()) if w]
             words = [w for w in words if w.lower() not in _STOP] or words
             term = " AND ".join(f'(release:"{w}" OR artist:"{w}")' for w in words) or term
         data = await self._mb("release", {"query": term, "limit": "25"})
@@ -180,8 +184,7 @@ class Recognizer:
             fmt = ", ".join(sorted({m.get("format", "") for m in media if m.get("format")}))
             out.append({
                 "mbid": r["id"], "album": r.get("title", ""),
-                "artist": "".join(c.get("name", "") + c.get("joinphrase", "")
-                                  for c in r.get("artist-credit", [])),
+                "artist": _credit(r),
                 "year": (r.get("date") or "")[:4], "country": r.get("country", ""),
                 "format": fmt, "tracks": r.get("track-count", 0),
                 "label": next((li["label"]["name"] for li in r.get("label-info", [])
@@ -201,15 +204,6 @@ class Recognizer:
         """Album cover from iTunes (better match for the LP than Shazam's single art)."""
         if not track.album:
             return ""
-        params = {"term": f"{track.artist} {track.album}", "entity": "album", "limit": "5"}
-        try:
-            async with self._session().get("https://itunes.apple.com/search", params=params) as r:
-                data = await r.json(content_type=None)
-        except Exception as exc:
-            log.debug("iTunes lookup failed: %s", exc)
-            return ""
         want = track.album.lower()
-        for res in data.get("results", []):
-            if want in res.get("collectionName", "").lower() and res.get("artworkUrl100"):
-                return res["artworkUrl100"].replace("100x100bb", "600x600bb")
-        return ""
+        return next((_big(x) for x in await self._itunes_albums(f"{track.artist} {track.album}", 5)
+                     if want in x.get("collectionName", "").lower()), "")

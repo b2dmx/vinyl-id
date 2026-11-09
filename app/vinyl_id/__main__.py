@@ -18,7 +18,7 @@ import numpy as np
 
 from . import web
 from .audio import ffmpeg_blocks, level_db
-from .config import AI_NOTE, BLOCK_SECONDS, SAMPLE_RATE, SIGNATURE, Settings
+from .config import AI_NOTE, BLOCK_SECONDS, SIGNATURE, Settings
 from .detector import Detector, Event
 from .fingerprint import FRAMES_PER_SECOND, hashes
 from .library import Library
@@ -53,6 +53,8 @@ class App:
         self.learn_start = 0                   # block index of learn_blocks[0]
         self.next_check: float | None = None
         self.busy = False
+        self.epoch = 0                         # goes up whenever what's playing may have changed
+        self._task: asyncio.Task | None = None  # the identification in flight (kept so it isn't dropped)
         self._last_level: tuple[float, float] = (0.0, -999.0)
         self.spin: Spin | None = None          # 'now spinning': the album and track being played
         self.song_start = 0.0                  # block index where the current song began (learning is stored relative to it)
@@ -60,8 +62,23 @@ class App:
 
     # --- scheduling ------------------------------------------------------------
     def _schedule(self, delay: float) -> None:
+        """Identify again after `delay`. Anything still being identified is now out of date."""
         self.next_check = self.clock() + delay
         self.buf.clear()
+        self.epoch += 1
+
+    def _bg(self, fn, *args) -> None:
+        """Run slow work off the audio loop, and say so in the log if it fails."""
+        def work() -> None:
+            try:
+                fn(*args)
+            except Exception:
+                log.exception("Background job failed")
+
+        asyncio.get_running_loop().run_in_executor(None, work)
+
+    def _learn(self, song_id: int, pcm: np.ndarray, t0: int) -> None:
+        self._bg(lambda: self.lib.learn(song_id, hashes(pcm), t0))
 
     def _rel(self, block: float) -> int:
         """Frames from the start of the current song (what the library stores)."""
@@ -78,15 +95,7 @@ class App:
         cut = (TAIL_TRIM_BLOCKS if trim_tail else 0) + int(extra_trim / BLOCK_SECONDS)
         blocks = self.learn_blocks[:-cut] if cut else self.learn_blocks
         if self.s.learn and self.current is not None and len(blocks) * BLOCK_SECONDS >= 5:
-            song_id, t0 = self.current, self._rel(self.learn_start)
-            pcm = np.concatenate(blocks)
-
-            def work() -> None:   # off the audio loop
-                hs = hashes(pcm)
-                self.lib.learn(song_id, hs, t0)
-                log.debug("Learned %d hashes for song %s", len(hs), song_id)
-
-            asyncio.get_running_loop().run_in_executor(None, work)
+            self._learn(self.current, np.concatenate(blocks), self._rel(self.learn_start))
         self._reset_learning()
 
     # --- main loop ---------------------------------------------------------------
@@ -131,6 +140,7 @@ class App:
                 log.info("Record stopped")
                 self._commit_learning(trim_tail=True)
                 self.next_check, self.current, self.unknown = None, None, False
+                self.epoch += 1
                 if self.spin:
                     self.spin.stopped(self.clock())
                 self.pub.playing(False)
@@ -147,9 +157,10 @@ class App:
                     and self.clock() >= self.next_check and len(self.buf) == self.buf.maxlen):
                 self.busy = True
                 clip_start = self.block_i - len(self.buf)
-                asyncio.create_task(self._identify(np.concatenate(self.buf), clip_start))
+                self._task = asyncio.create_task(self._identify(np.concatenate(self.buf), clip_start))
 
     async def _identify(self, pcm: np.ndarray, clip_start: int) -> None:
+        epoch = self.epoch
         try:
             hs = await asyncio.to_thread(hashes, pcm)
             local = await asyncio.to_thread(self.lib.match, hs) if self.s.learn else None
@@ -158,7 +169,7 @@ class App:
                 song_id, source, pos = local[0], "local", local[2] / FRAMES_PER_SECOND
             else:
                 track = await self.rec.identify(pcm)
-                if not self.det.playing:
+                if epoch != self.epoch:
                     return
                 if track is None:
                     log.info("Not recognized; retrying in %.0f s", self.s.retry_seconds)
@@ -175,6 +186,8 @@ class App:
                 source = "shazam"
                 pos = track.offset
 
+            if epoch != self.epoch:       # the record stopped or moved on while this was worked out
+                return
             song_id = self._reconcile(song_id)
             if song_id is None:                               # not on the album being spun: ask, don't learn
                 self._schedule(self.s.recheck_seconds)
@@ -190,7 +203,7 @@ class App:
                 self.unknown = False
                 self._apply_position(pos, clip_start)
                 if source == "shazam" and self.s.learn:       # Shazam-verified clip
-                    self.lib.learn(song_id, hs, self._rel(clip_start))
+                    self._bg(self.lib.learn, song_id, hs, self._rel(clip_start))
                 self.current, self.current_source = song_id, source
                 self.lib.played(song_id)
                 self.refresh_now()
@@ -198,6 +211,10 @@ class App:
                 info = self.now_info() or {}
                 log.info("Now playing (%s): %s - %s", source, info.get("artist"), info.get("title"))
             self._schedule(self.s.recheck_seconds)
+        except Exception:
+            log.exception("Identifying failed; retrying in %.0f s", self.s.retry_seconds)
+            if epoch == self.epoch:
+                self._schedule(self.s.retry_seconds)
         finally:
             self.busy = False
 
@@ -291,9 +308,7 @@ class App:
         song_id = self.lib.add_song(album_id, title, artist)
         self.spin = None                  # you said what it is: stop following the album
         if self.s.learn and len(self.recent) * BLOCK_SECONDS >= 5:
-            pcm, t0 = np.concatenate(self.recent), self._rel(self.recent_start)
-            asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.lib.learn(song_id, hashes(pcm), t0))
+            self._learn(song_id, np.concatenate(self.recent), self._rel(self.recent_start))
         self.current, self.current_source, self.unknown = song_id, "manual", False
         self._reset_learning()
         self.lib.played(song_id)
@@ -306,7 +321,9 @@ class App:
         song = self.lib.song(self.current) if self.current is not None else None
         if not song:
             return None
-        art_url = f"{self.s.public_url}/api/albums/{song.album_id}/art" if song.art_file else ""
+        # ?v= changes only when the cover does, so HA and the M-1 don't download it again per song
+        art_url = (f"{self.s.public_url}/api/albums/{song.album_id}/art?v={self.lib.art_version(song.art_file)}"
+                   if song.art_file else "")
         info = {"id": song.id, "title": song.title, "artist": song.artist, "album": song.album,
                 "album_id": song.album_id, "art_url": art_url, "source": self.current_source}
         if self.spin:
@@ -320,7 +337,7 @@ class App:
         sp = self.spin
         if not sp:
             return None
-        album = next((a for a in self.lib.albums() if a["id"] == sp.album_id), {})
+        album = self.lib.album(sp.album_id) or {}
         return {"album_id": sp.album_id, "album": album.get("album", ""), "artist": album.get("artist", ""),
                 "index": sp.i, "auto": sp.auto, "mismatch": sp.mismatch,
                 "tracks": sp.tracks, **sp.info(self.clock(), time.time())}
@@ -330,14 +347,10 @@ class App:
                 "library": self.lib.size(), "learn": self.s.learn, "spin": self.spin_status()}
 
     def refresh_now(self) -> None:
-        """Re-send the current song (after an edit in the UI)."""
+        """Send the current song to Home Assistant (new song, or after an edit in the UI)."""
         info = self.now_info()
         if info:
-            art = self.lib.art_bytes(info["album_id"]) if info["album_id"] else None
-            # cache-bust so HA/M-1 pick up a replaced cover
-            if info["art_url"]:
-                info["art_url"] += f"?v={int(time.time())}"
-            self.pub.track(info, art)
+            self.pub.track(info, self.lib.art_bytes(info["album_id"]) if info["art_url"] else None)
 
     def forget(self, song_id: int) -> None:
         self.lib.forget(song_id)
@@ -370,12 +383,15 @@ async def main() -> None:
     logging.basicConfig(level=s.log_level, format="%(asctime)s %(levelname)s %(message)s")
     log.info("%s — %s", SIGNATURE, AI_NOTE)
     if not s.audio_input:
-        raise SystemExit("AUDIO_INPUT is not set (see docker-compose.yml)")
+        raise SystemExit("No audio to listen to: with the Stream audio source, set the stream address (AUDIO_INPUT)")
     app = App(s)
     runner = await web.serve(app, s.web_port)
     task = asyncio.current_task()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        asyncio.get_running_loop().add_signal_handler(sig, task.cancel)
+        try:
+            asyncio.get_running_loop().add_signal_handler(sig, task.cancel)
+        except NotImplementedError:   # Windows (local test runs): Ctrl+C still stops it
+            pass
     try:
         await app.run()
     except asyncio.CancelledError:
@@ -384,8 +400,6 @@ async def main() -> None:
         await runner.cleanup()
         await app.close()
 
-
-assert SAMPLE_RATE == 16000
 
 if __name__ == "__main__":
     asyncio.run(main())
