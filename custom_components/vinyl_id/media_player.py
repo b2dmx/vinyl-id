@@ -50,7 +50,6 @@ class RecordPlayer(CoordinatorEntity[VinylCoordinator], MediaPlayerEntity):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)}, name="Record Player", manufacturer="Goobis",
             model="Vinyl ID", configuration_url=coordinator.url)
-        self._read_at: datetime = dt_util.utcnow()
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -61,11 +60,6 @@ class RecordPlayer(CoordinatorEntity[VinylCoordinator], MediaPlayerEntity):
     @callback
     def _speaker_changed(self, _event: Event[EventStateChangedData]) -> None:
         self.async_write_ha_state()
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        self._read_at = dt_util.utcnow()
-        super()._handle_coordinator_update()
 
     # --- the record -----------------------------------------------------------
     @property
@@ -102,17 +96,16 @@ class RecordPlayer(CoordinatorEntity[VinylCoordinator], MediaPlayerEntity):
         length = self._now.get("track_length")
         return round(length) if length else None
 
+    # Home Assistant works the live position out as "position + time since updated_at".
+    # Saying "0 at the moment the track started" never changes while a track plays, so the
+    # state is only written when something really changes.
     @property
     def media_position(self) -> int | None:
-        started = dt_util.parse_datetime(self._now.get("track_started_at") or "")
-        if started is None:
-            return None
-        pos = max(0.0, (self._read_at - started).total_seconds())
-        return round(min(pos, self.media_duration or pos))
+        return 0 if self.media_position_updated_at else None
 
     @property
     def media_position_updated_at(self) -> datetime | None:
-        return self._read_at if self.media_position is not None else None
+        return dt_util.parse_datetime(self._now.get("track_started_at") or "")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

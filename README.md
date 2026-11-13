@@ -44,6 +44,7 @@ Drop the needle. **Record Playing** turns on and **Now Playing** shows the song.
 
 - **Silence level:** **Input Level** shows how loud the signal is. If quiet passages count as silence, set the signal threshold a little below them.
 - **Learn my records** is on by default. Turn it off to always use Shazam.
+- The library can only be changed from the Vinyl ID page in Home Assistant. To let a script or another computer change it too, list its address under **Also allow edits from**.
 - Covers you set are never replaced automatically. A box set can have a cover for each LP.
 - To see the song on your speakers, play `http://<this app>:<port>/stream.mp3` on them instead of the line-in: it is the same record, as a stream that names its songs.
 - Songs that run together not picked up? Lower `RECHECK_SECONDS`.
@@ -52,12 +53,12 @@ Drop the needle. **Record Playing** turns on and **Now Playing** shows the song.
 
 ## License
 
-The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`, plus `app/icon.png`, `app/logo.png` and `app/vinyl_id/ui/logo.svg`) are © Goobis, all rights reserved. They are not covered by the MIT license, so please don't reuse them without permission.
+The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/` and `custom_components/vinyl_id/brand/`, plus `app/icon.png`, `app/logo.png` and `app/vinyl_id/ui/logo.svg`) are © Goobis, all rights reserved. They are not covered by the MIT license, so please don't reuse them without permission.
 
 ---
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.6.1 by Goobis<br>
+  Vinyl ID v0.6.2 by Goobis<br>
   AI was used to help develop this application
 </p>

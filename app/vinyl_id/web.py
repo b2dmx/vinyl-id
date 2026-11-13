@@ -41,8 +41,12 @@ def build(app: App) -> web.Application:
     lib, routes = app.lib, web.RouteTableDef()
 
     @routes.get("/api/status")
-    async def status(_):
-        return web.json_response({**app.status(), "signature": SIGNATURE, "ai_note": AI_NOTE})
+    async def status(req):
+        """?tracks=0 leaves the album's track list out (for things that ask every few seconds)."""
+        st = app.status()
+        if req.query.get("tracks") == "0" and st["spin"]:
+            st["spin"] = {k: v for k, v in st["spin"].items() if k != "tracks"}
+        return web.json_response({**st, "signature": SIGNATURE, "ai_note": AI_NOTE})
 
     @routes.get("/stream.mp3")
     async def stream(req):
@@ -143,7 +147,10 @@ def build(app: App) -> web.Application:
     @routes.post("/api/albums/{id:\\d+}/discs/{disc:\\d+}/art")
     async def set_disc_art(req):
         """A box set's disc cover: shown while that disc plays, instead of the album's."""
-        lib.set_disc_art(int(req.match_info["id"]), int(req.match_info["disc"]), await image_from(req))
+        album_id, disc = int(req.match_info["id"]), int(req.match_info["disc"])
+        if not any(t["disc"] == disc for t in lib.album_tracks(album_id)):
+            raise web.HTTPNotFound(text="That album has no such LP")
+        lib.set_disc_art(album_id, disc, await image_from(req))
         app.refresh_now()
         return web.json_response({"ok": True})
 

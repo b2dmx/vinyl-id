@@ -23,7 +23,7 @@ def status(playing=True, **now):
 
 
 async def setup(hass, aioclient_mock, data, speaker=None):
-    aioclient_mock.get(f"{URL}/api/status", json=data)
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=data)
     entry = MockConfigEntry(domain=DOMAIN, data={CONF_URL: URL}, options={CONF_SPEAKER: speaker} if speaker else {})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -37,7 +37,8 @@ async def test_shows_the_record(hass, aioclient_mock):
     assert s.state == "playing"
     a = s.attributes
     assert (a["media_title"], a["media_artist"], a["media_album_name"]) == ("Song Two", "The Band", "Test LP")
-    assert a["media_duration"] == 200 and 29 <= a["media_position"] <= 32
+    assert a["media_duration"] == 200 and a["media_position"] == 0
+    assert 29 <= (dt_util.utcnow() - a["media_position_updated_at"]).total_seconds() <= 33   # 30 s into the track
     assert a["side"] == "A" and a["media_track"] == 2 and a["identified_by"] == "spin"
     assert a["entity_picture"].startswith("/api/media_player_proxy/")
     assert a["supported_features"] == 0          # no speaker chosen: display only
@@ -69,8 +70,8 @@ async def test_volume_goes_to_the_chosen_speaker(hass, aioclient_mock):
 
 
 async def test_setup_form(hass, aioclient_mock):
-    aioclient_mock.get("http://nothing.test/api/status", status=404)
-    aioclient_mock.get(f"{URL}/api/status", json=status())
+    aioclient_mock.get("http://nothing.test/api/status?tracks=0", status=404)
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status())
     r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
     assert r["type"] is FlowResultType.FORM
     r = await hass.config_entries.flow.async_configure(r["flow_id"], {CONF_URL: "http://nothing.test"})

@@ -23,7 +23,7 @@ _LOGGER = logging.getLogger(__name__)
 async def fetch_status(hass: HomeAssistant, url: str) -> dict[str, Any]:
     """The app's status. Raises aiohttp.ClientError, TimeoutError or ValueError."""
     async with asyncio.timeout(5):
-        resp = await async_get_clientsession(hass).get(f"{url.rstrip('/')}/api/status")
+        resp = await async_get_clientsession(hass).get(f"{url.rstrip('/')}/api/status", params={"tracks": "0"})
         resp.raise_for_status()
         data = await resp.json()
     if not isinstance(data, dict) or "playing" not in data:
@@ -34,7 +34,7 @@ async def fetch_status(hass: HomeAssistant, url: str) -> dict[str, Any]:
 class VinylCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(hass, _LOGGER, config_entry=entry, name=DOMAIN,
-                         update_interval=timedelta(seconds=POLL_SECONDS))
+                         update_interval=timedelta(seconds=POLL_SECONDS), always_update=False)
         self.url: str = entry.data[CONF_URL]
 
     async def _async_update_data(self) -> dict[str, Any]:
