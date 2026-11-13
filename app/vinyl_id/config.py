@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 
 APP_NAME = "Vinyl ID"
-VERSION = "0.4.6"
+VERSION = "0.4.7"
 SIGNATURE = f"{APP_NAME} v{VERSION} by Goobis"
 AI_NOTE = "AI was used to help develop this application"
 
@@ -31,7 +31,6 @@ class Settings:
     stop_seconds: float = _f("STOP_SECONDS", 45)         # quiet this long = record stopped (covers a side flip)
     gap_seconds: float = _f("GAP_SECONDS", 2)            # dip this long between songs = track change
     gap_drop_db: float = _f("GAP_DROP_DB", 18)           # how far below the song's level a gap must dip
-    min_track_seconds: float = _f("MIN_TRACK_SECONDS", 20)  # no track change sooner than this after the last
 
     # Recognition
     sample_seconds: float = _f("SAMPLE_SECONDS", 12)

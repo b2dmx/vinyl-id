@@ -80,3 +80,12 @@ def test_old_library_gets_its_hash_counts(tmp_path):
     lib.db.commit()
     lib.db.close()
     assert Library(tmp_path).hash_count(sid) == n
+
+
+def test_track_lengths_can_be_set_by_track_number(tmp_path):
+    lib = Library(tmp_path)
+    tracks = [{"n": i, "side": s, "pos": p, "title": f"T{i}"}
+              for i, (s, p) in enumerate([("A", 1), ("A", 2), ("B", 1)], start=1)]
+    album = lib.add_album_from_release("Band", "LP", "mb", tracks)
+    assert lib.set_track_lengths(album, {"A1": 121, "b1": 9, "C4": 30}) == ["C4"]
+    assert [t["length"] for t in lib.album_tracks(album)] == [121, None, 9]

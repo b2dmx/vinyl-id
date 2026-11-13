@@ -95,6 +95,19 @@ class TrackMixin:
         self.db.commit()
 
     @locked
+    def set_track_lengths(self, album_id: int, lengths: dict[str, float]) -> list[str]:
+        """Lengths in seconds by track number ('A1', 'b10'). Returns the numbers not on the album."""
+        unknown = []
+        for key, secs in lengths.items():
+            m = re.match(r"^\s*([A-Za-z]+)\s*(\d+)\s*$", key)
+            cur = self.db.execute("UPDATE tracks SET length=? WHERE album_id=? AND side=? AND pos=?",
+                                  (secs, album_id, m.group(1).upper(), int(m.group(2)))) if m else None
+            if cur is None or cur.rowcount == 0:
+                unknown.append(key)
+        self.db.commit()
+        return unknown
+
+    @locked
     def album_tracks(self, album_id: int) -> list[dict]:
         rows = self.db.execute(
             "SELECT id, album_id, n, disc, side, pos, title, length, song_id FROM tracks "

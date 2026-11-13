@@ -27,7 +27,6 @@ class Detector:
         self._quiet = 0.0      # seconds below threshold (while playing)
         self._dip = 0.0        # seconds of the current dip
         self._dip_lo = self._dip_hi = 0.0   # quietest and loudest block of the current dip
-        self._since = 0.0      # seconds since the record started or the track last changed
         self._recent: deque[float] = deque(maxlen=int(20 / BLOCK_SECONDS))  # ~20 s of song levels
 
     def feed(self, db: float) -> Event | None:
@@ -37,13 +36,12 @@ class Detector:
         if not self.playing:
             self._loud = self._loud + dt if has_signal else 0.0
             if self._loud >= s.start_seconds:
-                self.playing, self._quiet, self._dip, self._since = True, 0.0, 0.0, 0.0
+                self.playing, self._quiet, self._dip = True, 0.0, 0.0
                 self._recent.clear()
                 return Event.STARTED
             return None
 
         # Playing: long silence means the record stopped.
-        self._since += dt
         self._quiet = 0.0 if has_signal else self._quiet + dt
         if self._quiet >= s.stop_seconds:
             self.playing, self._loud = False, 0.0
@@ -64,15 +62,10 @@ class Detector:
         self._recent.append(db)
         if dip == 0.0:
             return None
-        # Music is back. Quiet passages in soft music dip too, so a gap has to be long
-        # enough, and songs can't change again straight away.
-        is_gap = dip >= s.gap_seconds and self._since - dip >= s.min_track_seconds
+        # Music is back. Quiet passages in soft music dip too, so a gap has to be long enough.
+        is_gap = dip >= s.gap_seconds
         if dip >= LOG_DIPS_FROM:
             log.info("Dip %.1f s, %.0f to %.0f dB (song %s dB): %s", dip, self._dip_lo, self._dip_hi,
                      "?" if song_level is None else f"{song_level:.0f}",
-                     "track change" if is_gap else
-                     "too short" if dip < s.gap_seconds else "too soon after the last change")
-        if is_gap:
-            self._since = 0.0
-            return Event.TRACK_CHANGE
-        return None
+                     "track change" if is_gap else "too short")
+        return Event.TRACK_CHANGE if is_gap else None

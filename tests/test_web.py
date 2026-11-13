@@ -13,3 +13,16 @@ def test_is_image_rejects_everything_else():
     assert not is_image(b"")
     assert not is_image(b'{"data": {"token": "x"}}')
     assert not is_image(b"<html></html>")
+
+
+def test_seconds_reads_both_forms():
+    from vinyl_id.web import _seconds
+    assert _seconds("2:01") == 121
+    assert _seconds("0:09") == 9
+    assert _seconds(41) == 41
+    for bad in ("", "x", "-1", 0, True, "99:00"):
+        try:
+            _seconds(bad)
+        except (ValueError, TypeError):
+            continue
+        raise AssertionError(bad)

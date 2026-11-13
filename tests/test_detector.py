@@ -41,16 +41,9 @@ def test_soft_music_with_short_quiet_spells_is_one_song():
     assert ev == [Event.STARTED]
 
 
-def test_long_quiet_spells_change_the_track_at_most_every_min_track_seconds():
-    d = Detector(Settings(signal_threshold_db=-65))
-    ev = run(d, -37, 30)
-    for _ in range(10):                     # a 2.5 s quiet spell every 6.5 s, for 65 s
-        ev += run(d, -62, 2.5) + run(d, -37, 4)
-    changes = ev.count(Event.TRACK_CHANGE)
-    assert 1 <= changes <= 65 / Settings().min_track_seconds + 1
 
-
-def test_gap_right_after_a_change_is_ignored():
+def test_jingle_between_gaps_is_its_own_track():
+    """A 9-second jingle between two songs still gets its own track change."""
     d = Detector(Settings())
-    ev = run(d, -20, 60) + run(d, -60, 3) + run(d, -20, 10) + run(d, -60, 3) + run(d, -20, 30)
-    assert ev == [Event.STARTED, Event.TRACK_CHANGE]
+    ev = run(d, -20, 60) + run(d, -60, 3) + run(d, -20, 9) + run(d, -60, 3) + run(d, -20, 30)
+    assert ev == [Event.STARTED, Event.TRACK_CHANGE, Event.TRACK_CHANGE]

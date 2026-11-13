@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,6 +22,18 @@ def is_image(data: bytes | None) -> bool:
     """JPEG, PNG, GIF or WebP, judged by the first bytes."""
     return bool(data) and (data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n"
                            or data[:4] == b"GIF8" or (data[:4] == b"RIFF" and data[8:12] == b"WEBP"))
+
+
+def _seconds(v: str | float) -> float:
+    """'2:01' or 121 -> 121.0"""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        secs = float(v)
+    else:
+        m, _, s = str(v).strip().rpartition(":")
+        secs = int(m or 0) * 60 + float(s)
+    if not 0 < secs < 3600:
+        raise ValueError(v)
+    return secs
 
 
 def build(app: App) -> web.Application:
@@ -76,16 +89,24 @@ def build(app: App) -> web.Application:
 
     @routes.post("/api/albums/{id:\\d+}/art")
     async def set_art(req):
-        """Either an uploaded image (multipart 'file') or JSON {"url": ...} from the picker."""
+        """An uploaded image (multipart 'file'), JSON {"url": ...} from the picker,
+        or JSON {"data": <base64 image>} for tools that can only send JSON."""
         album_id = int(req.match_info["id"])
         if req.content_type.startswith("multipart/"):
             field = await (await req.multipart()).next()
             data = await field.read(decode=False) if field else None
         else:
-            url = str((await req.json())["url"])
-            if not url.lower().startswith(("http://", "https://")):
-                raise web.HTTPBadRequest(text="Not a web address")
-            data = await app.rec.fetch(url)
+            b = await req.json()
+            if "data" in b:
+                try:
+                    data = base64.b64decode(str(b["data"]), validate=True)
+                except ValueError:
+                    raise web.HTTPBadRequest(text="Not base64") from None
+            else:
+                url = str(b["url"])
+                if not url.lower().startswith(("http://", "https://")):
+                    raise web.HTTPBadRequest(text="Not a web address")
+                data = await app.rec.fetch(url)
         if not is_image(data):        # also stops the picker being used to read other web addresses
             raise web.HTTPBadRequest(text="No image")
         lib.set_art(album_id, bytes(data), locked=True)   # locked: never auto-replaced
@@ -122,6 +143,17 @@ def build(app: App) -> web.Application:
     @routes.get("/api/albums/{id:\\d+}/tracks")
     async def album_tracks(req):
         return web.json_response(lib.album_tracks(int(req.match_info["id"])))
+
+    @routes.patch("/api/albums/{id:\\d+}/tracks")
+    async def set_track_lengths(req):
+        """Track lengths, for releases MusicBrainz lists without them:
+        {"lengths": {"A1": "2:01", "A2": 41, ...}} (m:ss or seconds)."""
+        try:
+            lengths = {str(k): _seconds(v) for k, v in (await req.json())["lengths"].items()}
+        except (KeyError, AttributeError, ValueError, TypeError):
+            raise web.HTTPBadRequest(text='Send {"lengths": {"A1": "2:01", ...}}') from None
+        unknown = lib.set_track_lengths(int(req.match_info["id"]), lengths)
+        return web.json_response({"set": len(lengths) - len(unknown), "not_on_album": unknown})
 
     @routes.post("/api/spin")
     async def start_spin(req):
