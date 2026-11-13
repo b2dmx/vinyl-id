@@ -123,3 +123,41 @@ def test_shazam_title_inside_the_sleeve_title_matches(tmp_path):
     assert lib.find_track("Sand-Seal Race", "Composer")["pos"] == 1          # exact beats contained
     assert lib.find_track("Race", "Composer") is None                        # too short to mean anything
     assert lib.find_track("Seal Race", "Composer") is None                   # fits two tracks: no guess
+
+
+def test_covers_of_a_removed_album_are_kept_and_can_go_back(tmp_path):
+    lib = Library(tmp_path)
+    album = lib.add_album("Band", "Gone LP")
+    song = lib.add_song(album, "Song", "Band")
+    lib.set_art(album, b"\xff\xd8\xffcover", locked=True)
+    lib.forget(song)                                   # the album had nothing else: it goes
+    assert lib.albums() == []
+    [left] = lib.leftovers()
+    assert (left["artist"], left["album"], left["days_left"]) == ("Band", "Gone LP", 30)
+    assert lib.leftover_bytes(left["id"]) == b"\xff\xd8\xffcover"
+
+    other = lib.add_album("Band", "Kept LP")           # may get the removed album's id: it must not inherit its cover
+    assert lib.art_bytes(other) is None
+    assert lib.restore_leftover(left["id"], other) and lib.art_bytes(other) == b"\xff\xd8\xffcover"
+    assert lib.leftovers() == []
+
+
+def test_old_leftovers_are_deleted(tmp_path):
+    lib = Library(tmp_path)
+    album = lib.add_album("Band", "Gone LP")
+    song = lib.add_song(album, "Song", "Band")
+    lib.set_art(album, b"\xff\xd8\xffcover", locked=True)
+    lib.forget(song)
+    lib.db.execute("UPDATE leftovers SET removed_at = removed_at - 31 * 86400")
+    assert lib.leftovers() == [] and list(lib.leftover_dir.iterdir()) == []
+
+
+def test_a_full_library_stops_learning(tmp_path):
+    lib = Library(tmp_path)
+    sid, _ = lib.upsert("T", "A", "Al", "id1")
+    lib.max_bytes = 1                                  # already over
+    lib.learn(sid, [(1, 0), (2, 1)], 0)
+    assert lib.full and lib.hash_count(sid) == 0
+    lib.max_bytes = 0
+    lib.learn(sid, [(1, 0), (2, 1)], 0)
+    assert lib.hash_count(sid) == 2

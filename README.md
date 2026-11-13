@@ -87,6 +87,9 @@ Open **Vinyl ID** in the sidebar.
 - **Now spinning:** choose an album and where the needle is, if Vinyl ID hasn't worked it out by itself.
 - **Not right?** on the playing song corrects it, and Vinyl ID learns the correction.
 - **Change cover**, or give each LP of a box set its own.
+- **Track lengths:** if MusicBrainz has none for your record, type them in from the sleeve. The progress bar needs them.
+- **Learned songs:** rename a song, or forget one that was learned wrongly.
+- **Covers of removed albums** are kept for 30 days at the bottom of the page, where you can put one back on an album or delete it.
 
 ## Tips
 
@@ -95,7 +98,8 @@ Open **Vinyl ID** in the sidebar.
 - The library can only be changed from the Vinyl ID page in Home Assistant. To let a script or another computer change it too, list its address under **Also allow edits from**.
 - Covers you set are never replaced automatically.
 - `http://<home assistant>:8780/stream.mp3` is the record as a stream that names its songs, for a player that should show the title itself. It runs a few seconds behind the record.
-- Space: a cover is about 50-150 KB and a learned song about 0.2 MB, so 1,000 songs is roughly 250 MB. It all lives in the app's data folder.
+- Space: a cover is about 50-150 KB and a learned song about 0.2 MB, so 1,000 songs is roughly 250 MB. The page shows the current size. **Library size limit** stops learning at a size you choose; songs already learned keep working.
+- The app moved to another machine or port? Settings > Devices & services > Vinyl ID > Reconfigure.
 
 ## License
 
@@ -105,6 +109,6 @@ The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.7.1 by Goobis<br>
+  Vinyl ID v0.8.0 by Goobis<br>
   AI was used to help develop this application
 </p>

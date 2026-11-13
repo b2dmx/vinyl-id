@@ -82,6 +82,23 @@ class VinylConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user", errors=errors,
             data_schema=self.add_suggested_values_to_schema(schema, user_input or _guess_listener(self.hass)))
 
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """The app moved (another machine, another port)."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            url = user_input[CONF_URL].strip().rstrip("/")
+            try:
+                await fetch_status(self.hass, url)
+            except (aiohttp.ClientError, TimeoutError, ValueError):
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_update_reload_and_abort(entry, data_updates={CONF_URL: url})
+        schema = vol.Schema({vol.Required(CONF_URL, default=entry.data[CONF_URL]): str})
+        return self.async_show_form(
+            step_id="reconfigure", errors=errors,
+            data_schema=self.add_suggested_values_to_schema(schema, user_input or {}))
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:

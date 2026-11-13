@@ -106,3 +106,15 @@ async def test_listener_is_hidden_and_shown_again(hass, aioclient_mock):
     assert await hass.config_entries.async_remove(entry.entry_id)
     await hass.async_block_till_done()
     assert reg.async_get(mine).hidden_by is er.RegistryEntryHider.USER
+
+
+async def test_the_address_can_be_changed_later(hass, aioclient_mock):
+    entry = await setup(hass, aioclient_mock, status())
+    new = "http://moved.test:8780"
+    aioclient_mock.get(f"{new}/api/status?tracks=0", json=status())
+    r = await entry.start_reconfigure_flow(hass)
+    assert r["type"] is FlowResultType.FORM and r["step_id"] == "reconfigure"
+    r = await hass.config_entries.flow.async_configure(r["flow_id"], {CONF_URL: new + "/"})
+    await hass.async_block_till_done()
+    assert r["type"] is FlowResultType.ABORT and r["reason"] == "reconfigure_successful"
+    assert entry.data[CONF_URL] == new

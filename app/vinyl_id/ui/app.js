@@ -180,7 +180,9 @@ async function albumDialog(id) {
       <label class="field"><span>Album</span><input id="f-album" value="${esc(a && a.album)}"></label>
       <label class="field"><span>Artist</span><input id="f-artist" value="${esc(a && a.artist)}"></label></div></div>
     <div class="row"><button class="btn tonal" id="cover">Change cover</button>
-      <button class="btn tonal" id="find">${tracks.length ? "Pick another pressing" : "Find track list"}</button></div>
+      <button class="btn tonal" id="find">${tracks.length ? "Pick another pressing" : "Find track list"}</button>
+      ${tracks.length ? `<button class="btn tonal" id="lengths">Track lengths</button>` : ""}
+      ${a && a.songs ? `<button class="btn tonal" id="songs">Learned songs</button>` : ""}</div>
     ${discs.length ? `<div><h3>A cover for each LP</h3><p class="muted">Pick an LP to add its sleeve. Then choose which cover shows while this album plays.</p>
       <div class="row"><button class="btn ${a && a.lp_covers ? "text" : "tonal"}" data-lp="0">Album cover</button><button class="btn ${a && a.lp_covers ? "tonal" : "text"}" data-lp="1">Each LP's cover</button></div>
       <div class="row">${discs.map((d) => `<button class="btn ${discArt.includes(d) ? "tonal" : "text"}" data-disc="${d}">LP ${d}${discArt.includes(d) ? " · set" : ""}</button>`).join("")}</div>
@@ -195,6 +197,8 @@ async function albumDialog(id) {
   };
   $("#cover").onclick = () => coverDialog(id, a);
   $("#find").onclick = () => addAlbumDialog(id, a ? `${a.artist} ${a.album}` : "");
+  if ($("#lengths")) $("#lengths").onclick = () => lengthsDialog(id, tracks);
+  if ($("#songs")) $("#songs").onclick = () => songsDialog(id);
   let disc = 0;
   dlg.querySelectorAll("[data-lp]").forEach((b) => (b.onclick = async () => {
     try { await api(`albums/${id}/lp-covers`, { method: "PUT", body: { on: b.dataset.lp === "1" } }); await loadAlbums(); refresh(); albumDialog(id); } catch (er) { fail(er); }
@@ -208,6 +212,86 @@ async function albumDialog(id) {
   const spinTo = (sd, pos) => post("spin", { album_id: id, side: sd, pos }).then(() => { dlg.close(); refresh(); }, fail);
   if ($("#spinit")) $("#spinit").onclick = () => spinTo("", 1);
   dlg.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => { const [sd, p] = b.dataset.go.split("|"); spinTo(sd, Number(p)); }));
+}
+
+// How long each track is: the progress bar and songs that run together both need it.
+function lengthsDialog(id, tracks) {
+  let side = "";
+  const rows = tracks.map((t, i) => {
+    const head = t.side !== side ? `<div class="side-label">Side ${esc(t.side)}</div>` : "";
+    side = t.side;
+    return `${head}<div class="trk"><span>${esc(t.side)}${t.pos}</span><span>${esc(t.title)}</span>
+      <input class="len-in" data-i="${i}" value="${t.length ? mmss(t.length) : ""}" placeholder="m:ss" inputmode="numeric" aria-label="Length of ${esc(t.title)}"><span></span></div>`;
+  }).join("");
+  dialog("Track lengths", `<p class="muted">Minutes and seconds, as printed on the sleeve (for example 3:41). Leave a track empty if you don't know it.</p>
+    <div class="list" style="gap:2px">${rows}</div>`,
+    `<button class="btn text" id="back">Back</button><button class="btn filled" id="save">Save</button>`);
+  $("#back").onclick = () => albumDialog(id);
+  $("#save").onclick = async () => {
+    const lengths = {};
+    let bad = "";
+    dlg.querySelectorAll(".len-in").forEach((inp) => {
+      const t = tracks[Number(inp.dataset.i)], v = inp.value.trim();
+      if (!v || v === (t.length ? mmss(t.length) : "")) return;
+      if (!/^\d{1,2}:[0-5]\d$/.test(v)) { bad = `${t.side}${t.pos}`; return; }
+      lengths[`${t.side}${t.pos}`] = v;
+    });
+    if (bad) return toast(`${bad}: write the length as minutes:seconds, like 3:41`);
+    if (!Object.keys(lengths).length) return albumDialog(id);
+    try { await api(`albums/${id}/tracks`, { method: "PATCH", body: { lengths } }); toast("Lengths saved"); refresh(); albumDialog(id); } catch (e) { fail(e); }
+  };
+}
+
+// The songs Vinyl ID has learned from this album: fix a name, or forget one.
+async function songsDialog(id) {
+  let songs = [];
+  try { songs = await api(`albums/${id}/songs`); } catch (e) { return fail(e); }
+  dialog("Learned songs", songs.length ? `<p class="muted">Forgetting a song removes what Vinyl ID learned of it. It is learned again the next time it plays.</p>
+    <div class="list">${songs.map((s) => `<div class="song-row" data-id="${s.id}">
+      <label class="field"><span>Song</span><input class="s-title" value="${esc(s.title)}"></label>
+      <label class="field"><span>Artist</span><input class="s-artist" value="${esc(s.artist)}"></label>
+      <div class="row"><button class="btn tonal sm s-save">Save</button><button class="btn text sm s-forget">Forget</button></div></div>`).join("")}</div>`
+    : `<p class="muted">Nothing learned from this album yet.</p>`,
+    `<button class="btn text" id="back">Back</button>`);
+  $("#back").onclick = () => albumDialog(id);
+  dlg.querySelectorAll(".song-row").forEach((row) => {
+    const sid = row.dataset.id;
+    row.querySelector(".s-save").onclick = async () => {
+      const title = row.querySelector(".s-title").value.trim(), artist = row.querySelector(".s-artist").value.trim();
+      if (!title || !artist) return toast("Song and artist are needed");
+      try { await api(`songs/${sid}`, { method: "PATCH", body: { title, artist } }); toast("Saved"); refresh(); } catch (e) { fail(e); }
+    };
+    row.querySelector(".s-forget").onclick = async () => {
+      try { await api(`songs/${sid}`, { method: "DELETE" }); toast("Forgotten"); await loadAlbums(); loadLeftovers(); refresh(); albums.some((x) => x.id === id) ? songsDialog(id) : dlg.close(); } catch (e) { fail(e); }
+    };
+  });
+}
+
+// ---- Covers of removed albums ------------------------------------------------------------
+async function loadLeftovers() {
+  let left = [];
+  try { left = await api("leftovers"); } catch (e) { return; }
+  const el = $("#leftovers");
+  el.hidden = !left.length;
+  if (!left.length) return;
+  el.innerHTML = `<div class="section-head"><h2>Covers of removed albums</h2></div>
+    <p class="muted" style="margin:8px 0 16px">When an album goes, its covers are kept here for 30 days in case you want them back. Then they are deleted.</p>
+    <div class="grid">${left.map((c) => `<div class="tile left" data-id="${c.id}"><div class="art"><img src="api/leftovers/${c.id}/art" alt="" loading="lazy"></div>
+      <div class="t">${esc(c.album)}${c.disc ? ` · LP ${c.disc}` : ""}</div><div class="a">${esc(c.artist)}</div>
+      <div class="chips"><span class="chip">${c.days_left} ${c.days_left === 1 ? "day" : "days"} left</span></div>
+      <div class="row"><button class="btn tonal sm l-use">Put on an album</button><button class="btn text sm l-del">Delete</button></div></div>`).join("")}</div>`;
+  el.querySelectorAll(".left").forEach((tile) => {
+    const lid = tile.dataset.id;
+    tile.querySelector(".l-del").onclick = () => api(`leftovers/${lid}`, { method: "DELETE" }).then(loadLeftovers, fail);
+    tile.querySelector(".l-use").onclick = () => {
+      dialog("Put this cover on", albums.length
+        ? `<div class="list">${albums.map((a) => `<button class="pick" data-id="${a.id}"><span><b>${esc(a.album)}</b><div class="sub">${esc(a.artist)}</div></span></button>`).join("")}</div>`
+        : `<p class="muted">You have no albums to put it on.</p>`);
+      dlg.querySelectorAll(".pick").forEach((b) => (b.onclick = async () => {
+        try { await post(`leftovers/${lid}/restore`, { album_id: Number(b.dataset.id) }); artBust = Date.now(); dlg.close(); toast("Cover put back"); await loadAlbums(); loadLeftovers(); refresh(); } catch (e) { fail(e); }
+      }));
+    };
+  });
 }
 
 async function coverDialog(id, a) {
@@ -280,6 +364,13 @@ async function refresh() {
     status = s;
     $("#sig").textContent = s.signature;
     $("#ai").textContent = s.ai_note;
+    if (s.library_mb !== undefined) {
+      const size = s.library_mb < 10 ? s.library_mb.toFixed(1) : Math.round(s.library_mb);
+      $("#size").textContent = s.library_full
+        ? `The library is full (${size} of ${s.library_limit_mb} MB): new songs are not learned. Forget songs you don't need, or raise the limit in the app's settings.`
+        : `Library: ${s.library} ${s.library === 1 ? "song" : "songs"}, ${size} MB${s.library_limit_mb ? ` of ${s.library_limit_mb} MB` : ""}`;
+      $("#size").classList.toggle("notice", !!s.library_full);
+    }
     if (changed || !$("#now").firstChild) { renderNow(); renderSpin(); }
     if (grew) loadAlbums();   // a new record was learned: show it without a reload
   } catch (e) { /* the server restarting: try again next tick */ }
@@ -292,5 +383,5 @@ fetch("ui/logo.svg").then((r) => r.text()).then((t) => {
 $("#add-album").onclick = () => addAlbumDialog();
 let qTimer;
 $("#q").oninput = (e) => { query = e.target.value.trim(); clearTimeout(qTimer); qTimer = setTimeout(loadAlbums, 200); };
-refresh(); loadAlbums();
+refresh(); loadAlbums(); loadLeftovers();
 setInterval(refresh, 3000);

@@ -30,3 +30,9 @@ configuration:
     description: >-
       Normally the library can only be changed from the Vinyl ID page in Home Assistant.
       To let a script or another computer change it too, list their IP addresses here, separated by commas.
+  max_library_mb:
+    name: Library size limit (MB)
+    description: >-
+      Stop learning new songs once the library takes this much space. 0 means no limit.
+      Covers and your edits are still saved, and songs already learned keep working.
+      The Vinyl ID page shows the current size.

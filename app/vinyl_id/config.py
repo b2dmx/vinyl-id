@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 
 APP_NAME = "Vinyl ID"
-VERSION = "0.7.1"
+VERSION = "0.8.0"
 SIGNATURE = f"{APP_NAME} v{VERSION} by Goobis"
 AI_NOTE = "AI was used to help develop this application"
 
@@ -54,6 +54,7 @@ class Settings:
 
     # Library + web UI
     data_dir: str = _s("DATA_DIR", "/data")
+    max_library_mb: float = _f("MAX_LIBRARY_MB", 0)      # stop learning at this size on disk; 0 = no limit
     web_port: int = int(_f("WEB_PORT", 8780))            # not 8095: that is Music Assistant's
     public_url: str = _s("PUBLIC_URL", "http://localhost:8780")  # how HA reaches this service
 

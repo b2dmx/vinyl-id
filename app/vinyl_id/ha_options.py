@@ -39,6 +39,7 @@ env = {
     "DATA_DIR": "/data",
     "WEB_PORT": "8780",
     "PUBLIC_URL": f"http://{lan_ip()}:8780",
+    "MAX_LIBRARY_MB": str(opts.get("max_library_mb") or 0),
     # edits only through the HA sidebar (ingress), plus any addresses you allow yourself
     "EDIT_FROM": ",".join(["172.30.32.2", "127.0.0.1", *(opts.get("edit_from") or "").replace(" ", "").split(",")]).strip(","),
 }

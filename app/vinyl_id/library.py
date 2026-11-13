@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ from pathlib import Path
 MAX_HASHES_PER_SONG = 20000
 MIN_MATCH = 40          # aligned hashes needed to trust a local match
 MIN_RATIO = 2.0         # best match must beat the runner-up by this much
+LEFTOVER_DAYS = 30      # covers of removed albums are kept this long, then deleted
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS albums (
@@ -30,6 +32,9 @@ CREATE TABLE IF NOT EXISTS tracks (
   disc INTEGER NOT NULL DEFAULT 1, side TEXT NOT NULL, pos INTEGER NOT NULL, title TEXT NOT NULL,
   length REAL, song_id INTEGER);
 CREATE INDEX IF NOT EXISTS tracks_album ON tracks (album_id, n);
+CREATE TABLE IF NOT EXISTS leftovers (
+  id INTEGER PRIMARY KEY, file TEXT NOT NULL, artist TEXT NOT NULL, album TEXT NOT NULL,
+  disc INTEGER, removed_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS hashes (
   hash INTEGER NOT NULL, song_id INTEGER NOT NULL, t INTEGER NOT NULL,
   PRIMARY KEY (hash, song_id, t)) WITHOUT ROWID;
@@ -204,6 +209,10 @@ class Library(TrackMixin):
         self.dir = data_dir
         self.art_dir = data_dir / "art"
         self.art_dir.mkdir(parents=True, exist_ok=True)
+        self.leftover_dir = data_dir / "leftover-covers"
+        self.leftover_dir.mkdir(parents=True, exist_ok=True)
+        self.max_bytes = 0                       # 0 = no limit (set from the settings)
+        self._size: tuple[float, int] = (0.0, 0)  # (when measured, bytes)
         self.db = sqlite3.connect(data_dir / "library.db", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
@@ -211,6 +220,7 @@ class Library(TrackMixin):
         self.db.execute("PRAGMA synchronous=NORMAL")   # safe with WAL, far fewer disk flushes
         self._migrate()
         self.lock = threading.RLock()
+        self._purge_leftovers()
 
     def _columns(self, table: str) -> set[str]:
         return {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
@@ -241,6 +251,19 @@ class Library(TrackMixin):
     @locked
     def size(self) -> int:
         return self.db.execute("SELECT COUNT(*) FROM songs").fetchone()[0]
+
+    def size_bytes(self) -> int:
+        """Everything the library keeps on disk. Measured at most once a minute."""
+        at, size = self._size
+        if time.monotonic() - at > 60 or not at:
+            size = sum(p.stat().st_size for p in self.dir.rglob("*") if p.is_file() and p.name != "spin.json")
+            self._size = (time.monotonic(), size)
+        return size
+
+    @property
+    def full(self) -> bool:
+        """The size limit is reached: nothing more is learned (covers and edits are still saved)."""
+        return bool(self.max_bytes) and self.size_bytes() >= self.max_bytes
 
     @locked
     def hash_count(self, song_id: int) -> int:
@@ -302,7 +325,7 @@ class Library(TrackMixin):
     @locked
     def learn(self, song_id: int, hs: list[tuple[int, int]], t0: int) -> None:
         room = MAX_HASHES_PER_SONG - self.hash_count(song_id)
-        if room <= 0 or not hs:
+        if room <= 0 or not hs or self.full:
             return
         cur = self.db.executemany("INSERT OR IGNORE INTO hashes VALUES (?,?,?)",
                                   [(h, song_id, t + t0) for h, t in hs[:room]])
@@ -363,10 +386,76 @@ class Library(TrackMixin):
         self.db.commit()
 
     def _gc_albums(self) -> None:
-        """Drop albums with no songs and no track list (pre-loaded albums stay)."""
-        self.db.execute(
-            "DELETE FROM albums WHERE id NOT IN (SELECT album_id FROM songs WHERE album_id IS NOT NULL) "
-            "AND id NOT IN (SELECT album_id FROM tracks)")
+        """Drop albums with no songs and no track list (pre-loaded albums stay).
+        Their covers are set aside for a while instead of deleted, so a slip can be undone."""
+        gone = self.db.execute(
+            "SELECT id, artist, album FROM albums WHERE id NOT IN "
+            "(SELECT album_id FROM songs WHERE album_id IS NOT NULL) "
+            "AND id NOT IN (SELECT album_id FROM tracks)").fetchall()
+        for a in gone:
+            covers = [(self.art_dir / f"{a['id']}.jpg", None)]
+            covers += [(p, int(p.stem.split("-disc")[1])) for p in self.art_dir.glob(f"{a['id']}-disc*.jpg")]
+            for path, disc in covers:
+                if path.exists():
+                    name = f"{uuid.uuid4().hex}.jpg"
+                    path.replace(self.leftover_dir / name)
+                    self.db.execute(
+                        "INSERT INTO leftovers (file, artist, album, disc, removed_at) VALUES (?,?,?,?,?)",
+                        (name, a["artist"], a["album"], disc, time.time()))
+            self.db.execute("DELETE FROM albums WHERE id=?", (a["id"],))
+
+    # --- covers of removed albums --------------------------------------------
+    def _drop_leftover(self, row) -> None:
+        (self.leftover_dir / row["file"]).unlink(missing_ok=True)
+        self.db.execute("DELETE FROM leftovers WHERE id=?", (row["id"],))
+
+    @locked
+    def _purge_leftovers(self) -> None:
+        old = self.db.execute("SELECT id, file FROM leftovers WHERE removed_at < ?",
+                              (time.time() - LEFTOVER_DAYS * 86400,)).fetchall()
+        for row in old:
+            self._drop_leftover(row)
+        if old:
+            self.db.commit()
+
+    @locked
+    def leftovers(self) -> list[dict]:
+        self._purge_leftovers()
+        rows = self.db.execute(
+            "SELECT id, artist, album, disc, removed_at FROM leftovers ORDER BY removed_at DESC").fetchall()
+        return [dict(r) | {"days_left": max(0, round(LEFTOVER_DAYS - (time.time() - r["removed_at"]) / 86400))}
+                for r in rows]
+
+    @locked
+    def leftover_bytes(self, leftover_id: int) -> bytes | None:
+        row = self.db.execute("SELECT file FROM leftovers WHERE id=?", (leftover_id,)).fetchone()
+        path = self.leftover_dir / row["file"] if row else None
+        return path.read_bytes() if path and path.exists() else None
+
+    @locked
+    def delete_leftover(self, leftover_id: int) -> bool:
+        row = self.db.execute("SELECT id, file FROM leftovers WHERE id=?", (leftover_id,)).fetchone()
+        if not row:
+            return False
+        self._drop_leftover(row)
+        self.db.commit()
+        return True
+
+    @locked
+    def restore_leftover(self, leftover_id: int, album_id: int) -> bool:
+        """Put a set-aside cover on an album: as that LP's cover if the album has such an LP,
+        otherwise as the album cover."""
+        row = self.db.execute("SELECT id, file, disc FROM leftovers WHERE id=?", (leftover_id,)).fetchone()
+        data = self.leftover_bytes(leftover_id)
+        if not row or data is None or self.album(album_id) is None:
+            return False
+        if row["disc"] and any(t["disc"] == row["disc"] for t in self.album_tracks(album_id)):
+            self.set_disc_art(album_id, row["disc"], data)
+        else:
+            self.set_art(album_id, data, locked=True)
+        self._drop_leftover(row)
+        self.db.commit()
+        return True
 
     # --- editing (used by the web UI) ---------------------------------------
     @locked

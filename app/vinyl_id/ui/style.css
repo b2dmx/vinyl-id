@@ -220,3 +220,11 @@ dialog::backdrop { background: rgb(0 0 0 / .32); }
   .cover-row { grid-template-columns: 96px 1fr; } .cover-row .art { width: 96px; height: 96px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* track lengths, learned songs, covers of removed albums */
+.len-in { width: 64px; height: 36px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--outline, currentColor);
+  background: transparent; color: inherit; font: inherit; font-variant-numeric: tabular-nums; text-align: right; }
+.song-row { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+.song-row:last-child { border-bottom: 0; }
+.tile.left { cursor: default; text-align: left; display: grid; gap: 6px; align-content: start; }
+.tile.left::before { display: none; }

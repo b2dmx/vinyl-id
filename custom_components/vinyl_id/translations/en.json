@@ -20,13 +20,23 @@
           "source_name": "The name of the line-in in that player's list of sources, exactly as written there. Open the player in Home Assistant to see the list.",
           "monitor": "Only for a player that has a setting to play its line-in either directly or in sync with other rooms, direct listed first. Vinyl ID then picks direct while only that player listens, and in sync when you group other speakers onto the record. Leave empty if your player has no such setting."
         }
+      },
+      "reconfigure": {
+        "title": "Vinyl ID app address",
+        "data": {
+          "url": "Address of the Vinyl ID app"
+        },
+        "data_description": {
+          "url": "Leave as it is when the app runs on this Home Assistant. For the app on another machine: an address like http://192.168.1.50:8780."
+        }
       }
     },
     "error": {
       "cannot_connect": "No Vinyl ID app answered at that address. Check that the app is started; if it runs on another machine, use an address like http://192.168.1.50:8780."
     },
     "abort": {
-      "single_instance_allowed": "Vinyl ID is already set up."
+      "single_instance_allowed": "Vinyl ID is already set up.",
+      "reconfigure_successful": "The address is changed."
     }
   },
   "options": {

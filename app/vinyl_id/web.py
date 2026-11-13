@@ -163,6 +163,32 @@ def build(app: App) -> web.Application:
         app.refresh_now()
         return web.json_response({"ok": True})
 
+    @routes.get("/api/leftovers")
+    async def leftovers(_):
+        """Covers of albums that are gone, kept for 30 days."""
+        return web.json_response(lib.leftovers())
+
+    @routes.get("/api/leftovers/{id:\\d+}/art")
+    async def leftover_art(req):
+        data = lib.leftover_bytes(int(req.match_info["id"]))
+        if not data:
+            raise web.HTTPNotFound()
+        return web.Response(body=data, content_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+
+    @routes.post("/api/leftovers/{id:\\d+}/restore")
+    async def restore_leftover(req):
+        """{"album_id": ...}: put the cover on that album."""
+        if not lib.restore_leftover(int(req.match_info["id"]), int((await req.json())["album_id"])):
+            raise web.HTTPNotFound(text="That cover or album is gone")
+        app.refresh_now()
+        return web.json_response({"ok": True})
+
+    @routes.delete("/api/leftovers/{id:\\d+}")
+    async def delete_leftover(req):
+        if not lib.delete_leftover(int(req.match_info["id"])):
+            raise web.HTTPNotFound()
+        return web.json_response({"ok": True})
+
     @routes.get("/api/art-search")
     async def art_search(req):
         return web.json_response(await app.rec.search_art(req.query.get("q", "")))

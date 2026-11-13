@@ -41,6 +41,7 @@ class App:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.det = Detector(s)
         self.lib = Library(Path(s.data_dir))
+        self.lib.max_bytes = int(s.max_library_mb * 1024 * 1024)
         self.rec = Recognizer()
         self.pub = Publisher(s, on_forget=self._forget_current_threadsafe)
         self.buf: deque[np.ndarray] = deque(maxlen=int(s.sample_seconds / BLOCK_SECONDS))
@@ -441,7 +442,9 @@ class App:
         return {"playing": self.det.playing, "unknown": self.unknown, "now": self.now_info(),
                 "library": self.lib.size(), "learn": self.s.learn, "spin": spin,
                 # for set-up: how loud the input is now, and how loud it must be for a record to start
-                "level": round(self.level), "start_level": round(self.det.start_level)}
+                "level": round(self.level), "start_level": round(self.det.start_level),
+                "library_mb": round(self.lib.size_bytes() / 1048576, 1),
+                "library_limit_mb": self.s.max_library_mb, "library_full": self.lib.full}
 
     def refresh_now(self) -> None:
         """Send the current song to Home Assistant (new song, or after an edit in the UI)."""

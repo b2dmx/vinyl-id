@@ -28,3 +28,4 @@ services:
       # The level of your turntable when it is on but not playing (the page shows the input level)
       SIGNAL_THRESHOLD_DB: -50
       LEARN: "true"            # false = always ask Shazam
+      MAX_LIBRARY_MB: 0        # stop learning at this size on disk; 0 = no limit
