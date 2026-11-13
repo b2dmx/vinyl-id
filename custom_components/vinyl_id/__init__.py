@@ -11,8 +11,9 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .const import CONF_LISTENER
+from .const import CONF_LISTENER, CONF_MONITOR, CONF_SOURCE_NAME, CONF_SOURCE_PLAYER
 from .coordinator import VinylCoordinator
+from .routing import Router
 
 PLATFORMS = [Platform.MEDIA_PLAYER]
 
@@ -23,7 +24,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: VinylConfigEntry) -> boo
     coordinator = VinylCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
-    set_listener_hidden(hass, entry.options.get(CONF_LISTENER), True)
+    opts = entry.options
+    set_listener_hidden(hass, opts.get(CONF_LISTENER), True)
+    if opts.get(CONF_SOURCE_PLAYER) and opts.get(CONF_SOURCE_NAME) and opts.get(CONF_LISTENER):
+        router = Router(hass, opts[CONF_SOURCE_PLAYER], opts[CONF_SOURCE_NAME], opts[CONF_LISTENER],
+                        opts.get(CONF_MONITOR))
+        for stop in router.start():
+            entry.async_on_unload(stop)
+        entry.async_create_background_task(hass, router.check(), "vinyl_id first routing check")
     entry.async_on_unload(entry.add_update_listener(_reload))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

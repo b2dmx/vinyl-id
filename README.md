@@ -42,6 +42,12 @@ Needs Home Assistant with the Mosquitto broker.
 - **Record Playing**, **Now Playing** and **Album Art** (from the app) carry the same information for automations and displays.
 - **Vinyl ID Listener** is a silent speaker in Music Assistant. It is how the record reaches the app, so it says "playing" whenever the line-in is on, even with no record. Send the record to it, then ignore it. The integration hides it from dashboards for you.
 
+## Keeping the record connected
+
+With a line-in player such as an Apollo CAST, the record reaches Vinyl ID as playback in Music Assistant, and a restart of anything in the chain drops it. Tell the integration which player has the line-in and it puts the connection back by itself, within a minute. It never interrupts other music on that player.
+
+To hear the record in more rooms, group those speakers onto the line-in player as you would for any music. If the player has a direct/in-sync switch for its line-in, Vinyl ID uses direct while only that player is listening and in sync once other rooms join.
+
 ## Onboarding
 
 Drop the needle. **Record Playing** turns on and **Now Playing** shows the song. If Shazam doesn't know it, name it in the sidebar and Vinyl ID learns it.
@@ -65,6 +71,6 @@ The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.6.5 by Goobis<br>
+  Vinyl ID v0.7.0 by Goobis<br>
   AI was used to help develop this application
 </p>

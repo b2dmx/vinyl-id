@@ -13,24 +13,51 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er, selector
 
 from . import set_listener_hidden
-from .const import CONF_LISTENER, CONF_SPEAKER, DEFAULT_URL, DOMAIN
+from .const import (
+    CONF_LISTENER,
+    CONF_MONITOR,
+    CONF_SOURCE_NAME,
+    CONF_SOURCE_PLAYER,
+    CONF_SPEAKER,
+    DEFAULT_URL,
+    DOMAIN,
+)
 from .coordinator import fetch_status
 
 SPEAKER = selector.EntitySelector(selector.EntitySelectorConfig(domain="media_player"))
-PLAYERS = {vol.Optional(CONF_SPEAKER): SPEAKER, vol.Optional(CONF_LISTENER): SPEAKER}
+PLAYERS = {
+    vol.Optional(CONF_SPEAKER): SPEAKER,
+    vol.Optional(CONF_LISTENER): SPEAKER,
+    vol.Optional(CONF_SOURCE_PLAYER): SPEAKER,
+    vol.Optional(CONF_SOURCE_NAME): str,
+    vol.Optional(CONF_MONITOR): selector.EntitySelector(selector.EntitySelectorConfig(domain="select")),
+}
 
 
 def _options(user_input: dict[str, Any]) -> dict[str, Any]:
-    return {k: user_input[k] for k in (CONF_SPEAKER, CONF_LISTENER) if user_input.get(k)}
+    return {k: user_input[k] for k in
+            (CONF_SPEAKER, CONF_LISTENER, CONF_SOURCE_PLAYER, CONF_SOURCE_NAME, CONF_MONITOR) if user_input.get(k)}
 
 
 def _guess_listener(hass: HomeAssistant) -> dict[str, str]:
-    """The app's silent speaker, when Music Assistant has one that is named like it."""
+    """What can be recognised by itself: the app's silent speaker, the player whose line-in
+    feeds it, and that player's direct/in-sync switch."""
+    found: dict[str, str] = {}
     for e in er.async_get(hass).entities.values():
         if (e.domain == "media_player" and e.platform != DOMAIN
                 and (e.name or e.original_name or "").lower().startswith("vinyl id")):
-            return {CONF_LISTENER: e.entity_id}
-    return {}
+            found[CONF_LISTENER] = e.entity_id
+            break
+    for state in hass.states.async_all("media_player"):
+        line_in = [s for s in state.attributes.get("source_list") or [] if "sendspin source" in s.lower()]
+        if line_in:
+            found[CONF_SOURCE_PLAYER], found[CONF_SOURCE_NAME] = state.entity_id, line_in[0]
+            break
+    for state in hass.states.async_all("select"):
+        if state.entity_id.endswith("_line_in_monitor"):
+            found[CONF_MONITOR] = state.entity_id
+            break
+    return found
 
 
 class VinylConfigFlow(ConfigFlow, domain=DOMAIN):
