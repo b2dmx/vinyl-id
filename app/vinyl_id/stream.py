@@ -59,12 +59,14 @@ async def _serve(req: web.Request, app: App) -> web.StreamResponse:
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     assert proc.stdout is not None
     log.info("Record stream opened by %s", req.remote)
-    sent = None
+    sent, now, n = None, None, 0
     try:
         while True:
             await resp.write(await proc.stdout.readexactly(META_EVERY))
             if with_meta:
-                now = app.stream_title()
+                if n % 5 == 0:                      # about every 2 s is plenty
+                    now = app.stream_title()
+                n += 1
                 await resp.write(b"\0" if now == sent else icy_block(*now))   # 0 = nothing new
                 sent = now
     except (asyncio.IncompleteReadError, ConnectionError):

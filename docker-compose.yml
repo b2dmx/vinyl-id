@@ -8,22 +8,23 @@ services:
       - ./data:/data          # library, fingerprints and saved covers
     environment:
       # How the record reaches Vinyl ID:
-      #   sendspin → appears in Music Assistant as a Sendspin player
-      #   airplay  → appears in Music Assistant as an AirPlay speaker
-      #   stream   → reads AUDIO_INPUT directly (stream URL, device or file)
+      #   sendspin  a silent speaker, Vinyl ID Listener, appears in Music Assistant (recommended)
+      #   airplay   the same, as an AirPlay speaker
+      #   stream    Vinyl ID reads AUDIO_INPUT, the address of an audio stream
       AUDIO_SOURCE: sendspin
       RECEIVER_NAME: Vinyl ID Listener
-      AUDIO_INPUT: ""          # only used with AUDIO_SOURCE: stream
-      # MQTT broker (Mosquitto add-on on the HA Green)
-      MQTT_HOST: homeassistant.local   # your broker's address
+      AUDIO_INPUT: ""          # only with AUDIO_SOURCE: stream, e.g. http://192.168.1.50:8000/turntable.mp3
+      # Your MQTT broker (in Home Assistant: the Mosquitto broker app). Create a login for Vinyl ID there.
+      MQTT_HOST: homeassistant.local
       MQTT_PORT: 1883
       MQTT_USER: vinyl-id
       MQTT_PASSWORD: change-me
-      # Library page + cover URLs for HA
-      WEB_PORT: 8095
-      PUBLIC_URL: http://your-server.local:8095   # this machine's address, as HA sees it
-      # Who may change the library (comma-separated IPs). Blank = anyone on your network.
+      # The library page, and the address Home Assistant fetches covers from.
+      # Not 8095: Music Assistant uses that port.
+      WEB_PORT: 8780
+      PUBLIC_URL: http://your-server.local:8780   # this machine's address, as Home Assistant sees it
+      # Who may change the library (comma-separated IP addresses). Blank = anyone on your network.
       EDIT_FROM: ""
-      # Tune after a test record using the "Input Level" sensor in HA
+      # The level of your turntable when it is on but not playing (the page shows the input level)
       SIGNAL_THRESHOLD_DB: -50
-      TZ: America/New_York
+      LEARN: "true"            # false = always ask Shazam

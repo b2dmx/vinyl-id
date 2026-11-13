@@ -2,11 +2,14 @@ configuration:
   audio_source:
     name: Audio source
     description: >-
-      How the record reaches Vinyl ID. Sendspin or AirPlay: Vinyl ID Listener appears as a
-      (silent) speaker in Music Assistant. Stream: read the address below directly.
+      How the record reaches Vinyl ID. Sendspin (recommended) or AirPlay: a silent speaker,
+      Vinyl ID Listener, appears in Music Assistant; group it onto the player that has your
+      turntable on its line-in. Stream: Vinyl ID reads the address below and Music Assistant is not needed.
   audio_input:
     name: Stream address
-    description: Only used when the audio source is Stream.
+    description: >-
+      Only for the Stream audio source: the address of an audio stream that carries your turntable,
+      for example http://192.168.1.50:8000/turntable.mp3.
   learn:
     name: Learn my records
     description: >-
@@ -15,13 +18,15 @@ configuration:
   signal_threshold_db:
     name: Signal threshold (dB)
     description: >-
-      How loud counts as playing. Set about 10 dB below a quiet record's level,
-      shown by the Input Level sensor.
+      The level of your turntable when it is on but no record is playing. The Vinyl ID page shows
+      the input level: use that number. A record starts once the sound is 12 dB above it.
   receiver_name:
-    name: Speaker name
-    description: The name of the silent speaker Vinyl ID listens through, as shown in Music Assistant. Send the record to it; it is not the player to look at.
+    name: Listener name
+    description: >-
+      The name of the silent speaker Vinyl ID listens through, as shown in Music Assistant.
+      It is not the player to look at.
   edit_from:
     name: Also allow edits from
     description: >-
-      Normally the library can only be changed from this page in Home Assistant.
+      Normally the library can only be changed from the Vinyl ID page in Home Assistant.
       To let a script or another computer change it too, list their IP addresses here, separated by commas.

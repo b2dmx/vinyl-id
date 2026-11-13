@@ -44,8 +44,11 @@ def _guess_listener(hass: HomeAssistant) -> dict[str, str]:
     feeds it, and that player's direct/in-sync switch."""
     found: dict[str, str] = {}
     for e in er.async_get(hass).entities.values():
-        if (e.domain == "media_player" and e.platform != DOMAIN
-                and (e.name or e.original_name or "").lower().startswith("vinyl id")):
+        if e.domain != "media_player" or e.platform == DOMAIN:
+            continue
+        state = hass.states.get(e.entity_id)      # entities named after their device have no name of their own
+        name = e.name or e.original_name or (state.name if state else "")
+        if name.lower().startswith("vinyl id"):
             found[CONF_LISTENER] = e.entity_id
             break
     for state in hass.states.async_all("media_player"):

@@ -64,3 +64,16 @@ def test_record_stops_when_only_hum_is_left():
     for _ in range(60):                      # the side has ended; the hum hovers at the threshold
         ev += run(d, -63, 1) + run(d, -70, 1)
     assert ev == [Event.STARTED, Event.STOPPED]
+
+
+def test_lost_audio_is_not_a_gap_but_groove_noise_is():
+    """Over a network receiver, lost audio arrives as exact silence; a real gap is the groove's own noise."""
+    d = Detector(Settings(signal_threshold_db=-65, audio_input_format="pulse"))
+    ev = run(d, -35, 30) + run(d, -90, 6) + run(d, -35, 30) + run(d, -66, 3) + run(d, -35, 10)
+    assert ev == [Event.STARTED, Event.TRACK_CHANGE]
+
+
+def test_soft_passage_is_not_a_gap():
+    d = Detector(Settings(signal_threshold_db=-65))
+    ev = run(d, -35, 30) + run(d, -50, 8) + run(d, -35, 30) + run(d, -56, 60) + run(d, -35, 5)
+    assert ev == [Event.STARTED]          # quiet music keeps the record going and changes nothing

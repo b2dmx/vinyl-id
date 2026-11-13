@@ -52,3 +52,10 @@ async def test_direct_alone_and_in_sync_with_other_rooms(hass):
     assert await calls_of(hass, monitor=DIRECT) == [("select_option", {"option": SYNC})]
     cast(hass)
     assert await calls_of(hass, monitor=SYNC) == [("select_option", {"option": DIRECT})]
+
+
+async def test_paused_or_switched_off_is_left_alone(hass):
+    cast(hass, state="paused", source="Queue", members=())
+    assert await calls_of(hass) == []
+    cast(hass, state="off", source="Queue", members=())
+    assert await calls_of(hass) == []

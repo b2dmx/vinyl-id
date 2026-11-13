@@ -75,7 +75,7 @@ def _norm(s: str) -> str:
     s = re.sub(r"[\(\[].*?[\)\]]", "", s.lower())
     s = re.sub(r"\s-\s.*(remaster|mix|version|edit|mono|stereo).*$", "", s)
     s = re.sub(r"^\s*(the|a|an)\s+", "", s)          # Shazam says "Stables", the sleeve "The Stables"
-    return re.sub(r"[^a-z0-9]+", "", s)
+    return re.sub(r"[\W_]+", "", s)          # letters and digits of any script
 
 
 def _same_title(a: str, b: str) -> bool:
@@ -86,6 +86,8 @@ def _same_title(a: str, b: str) -> bool:
 
 def _pick(tracks: list, want: str):
     """The track with this title: an exact one, else the only one that contains it (or is contained)."""
+    if not want:                              # nothing left to compare (a title of symbols only)
+        return None
     exact = [t for t in tracks if _norm(t["title"]) == want]
     if exact:
         return exact[0]

@@ -59,6 +59,9 @@ function renderNow() {
     el.innerHTML = `<div class="now"><div class="art">${icon(I.album)}</div><div class="info">
       <h2 class="title">${s.playing ? "Listening..." : "Nothing playing"}</h2>
       <p class="sub">${s.playing ? (s.unknown ? "Shazam doesn't know this one." : "Working out what's playing.") : "Drop the needle and it shows up here."}</p>
+      ${s.playing || s.level === undefined ? "" : `<p class="muted">${s.level <= -88
+        ? "No sound is reaching Vinyl ID. Check that the record is sent to the Vinyl ID Listener."
+        : `Input level ${s.level} dB. A record starts at ${s.start_level} dB.`}</p>`}
       ${s.unknown ? `<div class="row"><button class="btn tonal" id="nameit">Name it</button></div>` : ""}</div></div>`;
     if (s.unknown) $("#nameit").onclick = () => nameDialog(null);
     return;
@@ -267,7 +270,7 @@ function addAlbumDialog(forId = null, preset = "") {
 
 // ---- wiring -------------------------------------------------------------------------------
 // what the Now Playing and Now spinning cards are drawn from
-const sig = (s) => JSON.stringify([s.now && [s.now.id, s.now.title, s.now.track_started_at, s.now.source, s.now.spin_mismatch], s.playing, s.unknown, s.spin && [s.spin.index, s.spin.album_id, s.spin.mismatch]]);
+const sig = (s) => JSON.stringify([s.now && [s.now.id, s.now.title, s.now.track_started_at, s.now.source, s.now.spin_mismatch], s.playing, s.unknown, !s.playing && s.level, s.spin && [s.spin.index, s.spin.album_id, s.spin.mismatch]]);
 
 async function refresh() {
   try {

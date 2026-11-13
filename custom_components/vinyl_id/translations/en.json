@@ -7,23 +7,23 @@
         "data": {
           "url": "Address of the Vinyl ID app",
           "speaker": "Speaker that plays your record (optional)",
-          "listener": "The app's silent speaker in Music Assistant (optional)",
+          "listener": "The app's silent speaker (optional)",
           "source_player": "Player whose line-in the record is on (optional)",
           "source_name": "That player's line-in source (optional)",
-          "monitor": "Direct or in-sync switch of that player (optional)"
+          "monitor": "That player's direct / in-sync switch (optional)"
         },
         "data_description": {
-          "url": "Leave as it is when the app runs on this Home Assistant.",
-          "speaker": "The Record Player's volume and power buttons control this speaker. Leave empty to only show what is playing.",
-          "listener": "Vinyl ID listens through a silent speaker, usually named Vinyl ID Listener. It is not the player to look at, so it is hidden from dashboards here. It keeps working and stays under Settings > Entities.",
-          "source_player": "For example an Apollo CAST with the turntable on its Line In. With this, its line-in source and the silent speaker filled in, Vinyl ID reconnects them whenever a restart drops the connection. It never interrupts other music playing on that player.",
-          "source_name": "The source name exactly as the player lists it, for example Sendspin Source (Apollo CAST...).",
-          "monitor": "A select whose first option plays the line-in directly and whose second plays it in sync with other rooms. Vinyl ID picks direct while only the silent speaker listens, and in sync as soon as you group other speakers onto the record."
+          "url": "Leave as it is when the app runs on this Home Assistant. For the app on another machine: http://<that machine>:8780.",
+          "speaker": "The speaker or amp you listen to records on. The Record Player's volume and power buttons control it. Leave empty to only show what is playing.",
+          "listener": "The Music Assistant speaker named Vinyl ID Listener. It is hidden from dashboards, since it is not the player to look at. It keeps working and stays under Settings > Entities.",
+          "source_player": "The Music Assistant player your turntable is plugged into, for example an Apollo CAST. When that player is idle, Vinyl ID starts its line-in and connects the silent speaker to it, also after restarts. It never takes the player away from other music.",
+          "source_name": "The name of the line-in in that player's list of sources, exactly as written there. Open the player in Home Assistant to see the list.",
+          "monitor": "Only for a player that has a setting to play its line-in either directly or in sync with other rooms, direct listed first. Vinyl ID then picks direct while only that player listens, and in sync when you group other speakers onto the record. Leave empty if your player has no such setting."
         }
       }
     },
     "error": {
-      "cannot_connect": "No Vinyl ID app answered at that address. Check that the app is running."
+      "cannot_connect": "No Vinyl ID app answered at that address. Check that the app is started; if it runs on another machine, use http://<that machine>:8780."
     },
     "abort": {
       "single_instance_allowed": "Vinyl ID is already set up."
@@ -35,17 +35,17 @@
         "title": "Record Player",
         "data": {
           "speaker": "Speaker that plays your record (optional)",
-          "listener": "The app's silent speaker in Music Assistant (optional)",
+          "listener": "The app's silent speaker (optional)",
           "source_player": "Player whose line-in the record is on (optional)",
           "source_name": "That player's line-in source (optional)",
-          "monitor": "Direct or in-sync switch of that player (optional)"
+          "monitor": "That player's direct / in-sync switch (optional)"
         },
         "data_description": {
-          "speaker": "The Record Player's volume and power buttons control this speaker. Leave empty to only show what is playing.",
-          "listener": "Vinyl ID listens through a silent speaker, usually named Vinyl ID Listener. It is not the player to look at, so it is hidden from dashboards here. It keeps working and stays under Settings > Entities.",
-          "source_player": "For example an Apollo CAST with the turntable on its Line In. With this, its line-in source and the silent speaker filled in, Vinyl ID reconnects them whenever a restart drops the connection. It never interrupts other music playing on that player.",
-          "source_name": "The source name exactly as the player lists it, for example Sendspin Source (Apollo CAST...).",
-          "monitor": "A select whose first option plays the line-in directly and whose second plays it in sync with other rooms. Vinyl ID picks direct while only the silent speaker listens, and in sync as soon as you group other speakers onto the record."
+          "speaker": "The speaker or amp you listen to records on. The Record Player's volume and power buttons control it. Leave empty to only show what is playing.",
+          "listener": "The Music Assistant speaker named Vinyl ID Listener. It is hidden from dashboards, since it is not the player to look at. It keeps working and stays under Settings > Entities.",
+          "source_player": "The Music Assistant player your turntable is plugged into, for example an Apollo CAST. When that player is idle, Vinyl ID starts its line-in and connects the silent speaker to it, also after restarts. It never takes the player away from other music.",
+          "source_name": "The name of the line-in in that player's list of sources, exactly as written there. Open the player in Home Assistant to see the list.",
+          "monitor": "Only for a player that has a setting to play its line-in either directly or in sync with other rooms, direct listed first. Vinyl ID then picks direct while only that player listens, and in sync when you group other speakers onto the record. Leave empty if your player has no such setting."
         }
       }
     }

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -38,15 +40,18 @@ def _seconds(v: str | float) -> float:
     return secs
 
 
+def cover_cache(req: web.Request) -> dict[str, str]:
+    """A cover address with ?v= changes whenever the cover does, so that copy can be kept."""
+    return {"Cache-Control": "public, max-age=31536000, immutable" if "v" in req.query else "no-cache"}
+
+
 def build(app: App) -> web.Application:
     lib, routes = app.lib, web.RouteTableDef()
 
     @routes.get("/api/status")
     async def status(req):
         """?tracks=0 leaves the album's track list out (for things that ask every few seconds)."""
-        st = app.status()
-        if req.query.get("tracks") == "0" and st["spin"]:
-            st["spin"] = {k: v for k, v in st["spin"].items() if k != "tracks"}
+        st = app.status(tracks=req.query.get("tracks") != "0")
         return web.json_response({**st, "signature": SIGNATURE, "ai_note": AI_NOTE})
 
     @routes.get("/stream.mp3")
@@ -88,13 +93,15 @@ def build(app: App) -> web.Application:
         data = lib.art_bytes(int(req.match_info["id"]))
         if not data:
             raise web.HTTPNotFound()
-        return web.Response(body=data, content_type="image/jpeg",
-                            headers={"Cache-Control": "no-cache"})
+        return web.Response(body=data, content_type="image/jpeg", headers=cover_cache(req))
 
     @routes.patch("/api/albums/{id:\\d+}")
     async def edit_album(req):
         body = await req.json()
-        lib.edit_album(int(req.match_info["id"]), body["artist"].strip(), body["album"].strip())
+        try:
+            lib.edit_album(int(req.match_info["id"]), body["artist"].strip(), body["album"].strip())
+        except sqlite3.IntegrityError:
+            raise web.HTTPConflict(text="You already have an album with that artist and name") from None
         app.refresh_now()
         return web.json_response({"ok": True})
 
@@ -122,7 +129,8 @@ def build(app: App) -> web.Application:
 
     @routes.post("/api/albums/{id:\\d+}/art")
     async def set_art(req):
-        lib.set_art(int(req.match_info["id"]), await image_from(req), locked=True)   # locked: never auto-replaced
+        # in a thread: converting a PNG or WebP can take seconds, and the audio loop must keep running
+        await asyncio.to_thread(lib.set_art, int(req.match_info["id"]), await image_from(req), True)
         app.refresh_now()
         return web.json_response({"ok": True})
 
@@ -143,7 +151,7 @@ def build(app: App) -> web.Application:
         data = lib.art_file_bytes(name) if name else None
         if not data:
             raise web.HTTPNotFound()
-        return web.Response(body=data, content_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+        return web.Response(body=data, content_type="image/jpeg", headers=cover_cache(req))
 
     @routes.post("/api/albums/{id:\\d+}/discs/{disc:\\d+}/art")
     async def set_disc_art(req):
@@ -151,7 +159,7 @@ def build(app: App) -> web.Application:
         album_id, disc = int(req.match_info["id"]), int(req.match_info["disc"])
         if not any(t["disc"] == disc for t in lib.album_tracks(album_id)):
             raise web.HTTPNotFound(text="That album has no such LP")
-        lib.set_disc_art(album_id, disc, await image_from(req))
+        await asyncio.to_thread(lib.set_disc_art, album_id, disc, await image_from(req))
         app.refresh_now()
         return web.json_response({"ok": True})
 
@@ -179,7 +187,7 @@ def build(app: App) -> web.Application:
             album_id = lib.add_album_from_release(rel["artist"], rel["album"], mbid, rel["tracks"])
         if not lib.album_has_art(album_id):
             if data := await app.rec.front_cover(mbid):
-                lib.set_art(album_id, data, locked=False)
+                await asyncio.to_thread(lib.set_art, album_id, data, False)
         return web.json_response({"id": album_id, "tracks": len(rel["tracks"])})
 
     @routes.get("/api/albums/{id:\\d+}/tracks")
@@ -195,6 +203,7 @@ def build(app: App) -> web.Application:
         except (KeyError, AttributeError, ValueError, TypeError):
             raise web.HTTPBadRequest(text='Send {"lengths": {"A1": "2:01", ...}}') from None
         unknown = lib.set_track_lengths(int(req.match_info["id"]), lengths)
+        app.refresh_now()
         return web.json_response({"set": len(lengths) - len(unknown), "not_on_album": unknown})
 
     @routes.post("/api/spin")
@@ -236,7 +245,7 @@ def build(app: App) -> web.Application:
     async def edits_guard(req, handler):
         """Covers stay readable on the LAN (for the M-1); changes only from allowed IPs."""
         if allowed and req.method not in ("GET", "HEAD") and req.remote not in allowed:
-            raise web.HTTPForbidden(text="Edit from the Vinyl ID page in Home Assistant")
+            raise web.HTTPForbidden(text="This address may not change the library (see EDIT_FROM / Also allow edits from)")
         return await handler(req)
 
     wa = web.Application(client_max_size=10 * 1024 * 1024, middlewares=[edits_guard, bad_request])

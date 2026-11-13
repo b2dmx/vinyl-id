@@ -38,8 +38,8 @@ def ffmpeg_input(source: str, input_format: str = "") -> list[str]:
     return [*cmd, "-i", source]
 
 
-async def ffmpeg_blocks(source: str, input_format: str = "") -> AsyncIterator[np.ndarray]:
-    """Yield int16 mono blocks forever, restarting ffmpeg if the source drops."""
+async def ffmpeg_blocks(source: str, input_format: str = "") -> AsyncIterator[np.ndarray | None]:
+    """Yield int16 mono blocks forever, restarting ffmpeg if the source drops (None marks a drop)."""
     cmd = [*ffmpeg_input(source, input_format), "-f", "s16le", "-ac", "1", "-ar", str(SAMPLE_RATE), "-"]
 
     while True:
@@ -55,6 +55,7 @@ async def ffmpeg_blocks(source: str, input_format: str = "") -> AsyncIterator[np
                 yield np.frombuffer(data, dtype=np.int16)
         except asyncio.IncompleteReadError:
             log.warning("Audio input ended; retrying in 5 s")
+            yield None      # nothing is playing while there is no input
         finally:
             if proc.returncode is None:
                 proc.kill()

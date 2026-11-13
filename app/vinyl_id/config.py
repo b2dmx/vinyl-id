@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 
 APP_NAME = "Vinyl ID"
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 SIGNATURE = f"{APP_NAME} v{VERSION} by Goobis"
 AI_NOTE = "AI was used to help develop this application"
 
@@ -27,11 +27,11 @@ class Settings:
 
     # Signal detection (dBFS). Tune with the "Input Level" sensor in HA.
     signal_threshold_db: float = _f("SIGNAL_THRESHOLD_DB", -50)
-    start_margin_db: float = _f("START_MARGIN_DB", 12)   # a record starts (and stays on) only with sound this far above the threshold
+    start_margin_db: float = _f("START_MARGIN_DB", 12)   # a record starts only with sound this far above the threshold
     start_seconds: float = _f("START_SECONDS", 2)        # sound this long = record started
     stop_seconds: float = _f("STOP_SECONDS", 45)         # quiet this long = record stopped (covers a side flip)
     gap_seconds: float = _f("GAP_SECONDS", 2)            # dip this long between songs = track change
-    gap_drop_db: float = _f("GAP_DROP_DB", 18)           # how far below the song's level a gap must dip
+    gap_ceiling_db: float = _f("GAP_CEILING_DB", 6)      # a gap (or the side's end) stays within this of the threshold
 
     # Recognition
     sample_seconds: float = _f("SAMPLE_SECONDS", 12)
@@ -54,8 +54,8 @@ class Settings:
 
     # Library + web UI
     data_dir: str = _s("DATA_DIR", "/data")
-    web_port: int = int(_f("WEB_PORT", 8095))
-    public_url: str = _s("PUBLIC_URL", "http://localhost:8095")  # how HA reaches this service
+    web_port: int = int(_f("WEB_PORT", 8780))            # not 8095: that is Music Assistant's
+    public_url: str = _s("PUBLIC_URL", "http://localhost:8780")  # how HA reaches this service
 
     edit_from: str = _s("EDIT_FROM")  # comma-separated IPs allowed to edit; blank = anyone on the LAN
 

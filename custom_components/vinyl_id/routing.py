@@ -2,7 +2,8 @@
 
 The app hears the record through a silent speaker (the listener) that is grouped onto the
 line-in of another player (for example an Apollo CAST). That grouping is live playback,
-not a setting: any restart drops it. This puts it back.
+not a setting: a restart of the app, Music Assistant or the player drops it. This puts it
+back, as long as the line-in player is idle (it is never taken away from other music).
 
 When the line-in player can also play its input directly (a "monitor" select with a direct
 and an in-sync option), direct is used while only the listener is grouped onto it, and
@@ -11,6 +12,7 @@ in-sync as soon as other speakers join, so every room plays together.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 import logging
 import time
@@ -81,8 +83,8 @@ class Router:
         members = player.attributes.get(ATTR_GROUP_MEMBERS) or []
 
         if not (on_line_in and playing and self.listener in members):
-            if playing and not on_line_in:
-                return                               # busy with other music: never interrupt it
+            if player.state != MediaPlayerState.IDLE and not (playing and on_line_in):
+                return                               # other music, paused, or switched off: leave it alone
             if time.monotonic() - self._last_try < RETRY_AFTER:
                 return
             self._last_try = time.monotonic()
@@ -106,4 +108,5 @@ class Router:
             await self._call("select", "select_option", self.monitor, **{ATTR_OPTION: want})
 
     async def _call(self, domain: str, service: str, entity_id: str, **data) -> None:
-        await self.hass.services.async_call(domain, service, {ATTR_ENTITY_ID: entity_id, **data}, blocking=True)
+        async with asyncio.timeout(30):              # a call that never answers must not stop later checks
+            await self.hass.services.async_call(domain, service, {ATTR_ENTITY_ID: entity_id, **data}, blocking=True)

@@ -59,6 +59,7 @@ class App:
         self._last_level: tuple[float, float] = (0.0, -999.0)
         self._art_name: str | None = None      # the cover file now_info() picked
         self._quick = False                    # the next identification may use a short sample
+        self.level = -90.0                     # the input's level right now, in dB
         self.spin: Spin | None = self._load_spin()   # 'now spinning': the album and track being played
         self.song_start = 0.0                  # block index where the current song began (learning is stored relative to it)
         self.start_exact = False               # True once Shazam or a local match told us the real position
@@ -99,9 +100,21 @@ class App:
         """Add confirmed audio to the current song's fingerprint."""
         cut = (TAIL_TRIM_BLOCKS if trim_tail else 0) + int(extra_trim / BLOCK_SECONDS)
         blocks = self.learn_blocks[:-cut] if cut else self.learn_blocks
-        if self.s.learn and self.current is not None and len(blocks) * BLOCK_SECONDS >= 5:
+        # A track guessed from the album is not learned once something else has been heard on it
+        doubted = self.spin is not None and self.spin.mismatch is not None
+        if self.s.learn and self.current is not None and not doubted and len(blocks) * BLOCK_SECONDS >= 5:
             self._learn(self.current, np.concatenate(blocks), self._rel(self.learn_start))
         self._reset_learning()
+
+    def _record_stopped(self) -> None:
+        self._commit_learning(trim_tail=True)
+        self.next_check, self.current, self.unknown = None, None, False
+        self.epoch += 1
+        if self.spin:
+            self.spin.stopped(self.clock())
+            self._save_spin()
+        self.pub.playing(False)
+        self.pub.track(None)
 
     # --- main loop ---------------------------------------------------------------
     async def run(self) -> None:
@@ -110,7 +123,12 @@ class App:
         self.pub.playing(False)
         self.pub.library(self.lib.size())
         async for block in ffmpeg_blocks(self.s.audio_input, self.s.audio_input_format):
-            db = level_db(block)
+            if block is None:                    # the input dropped: a record can't still be playing
+                if self.det.input_lost():
+                    log.info("Record stopped (the audio input went away)")
+                    self._record_stopped()
+                continue
+            db = self.level = level_db(block)
             self._report_level(db)
             self.buf.append(block)
             if len(self.recent) == self.recent.maxlen:
@@ -144,13 +162,7 @@ class App:
                 self._schedule(self.s.settle_seconds, quick=True)
             elif ev is Event.STOPPED:
                 log.info("Record stopped")
-                self._commit_learning(trim_tail=True)
-                self.next_check, self.current, self.unknown = None, None, False
-                self.epoch += 1
-                if self.spin:
-                    self.spin.stopped(self.clock())
-                self.pub.playing(False)
-                self.pub.track(None)
+                self._record_stopped()
 
             if self.spin and self.det.playing and not self.det.in_dip and self.spin.tick(self.clock()):
                 # songs running together: the listed length ran out before a gap was heard
@@ -199,7 +211,7 @@ class App:
                 song = self.lib.song(song_id)
                 if needs_art and track.art_url and song and song.album_id:
                     if data := await self.rec.fetch(track.art_url):
-                        self.lib.set_art(song.album_id, data, locked=False)
+                        await asyncio.to_thread(self.lib.set_art, song.album_id, data, False)
                 source = "shazam"
                 pos = track.offset
 
@@ -245,8 +257,16 @@ class App:
         if self.spin:
             tr = self.lib.track_in_album(self.spin.album_id, song_id)
             if tr is None:
-                if not self.spin.mismatch:
-                    self.spin.mismatch = {"title": song.title, "artist": song.artist, "album": song.album}
+                seen = self.spin.mismatch
+                if self.spin.auto and seen and seen.get("id") == song_id:
+                    # the album was only a guess, and the same other song was heard twice: let go
+                    log.info("Not this album after all; following stopped")
+                    self.spin = None
+                    self._save_spin()
+                    return song_id
+                if not seen or seen.get("id") != song_id:
+                    self.spin.mismatch = {"id": song_id, "title": song.title, "artist": song.artist,
+                                          "album": song.album}
                     self.refresh_now()
                 return None
             self.spin.mismatch = None
@@ -254,6 +274,7 @@ class App:
             j = next(i for i, t in enumerate(self.spin.tracks) if t["id"] == tr["id"])
             if j != self.spin.i:
                 self.spin.jump(j, None)        # a different track of the same album: follow it
+                self._save_spin()
             return song_id
         tr = self.lib.find_track(song.title, song.artist)
         if tr:                                  # auto-attach: tracklist and timer start by themselves
@@ -262,6 +283,7 @@ class App:
             self.spin = Spin(tr["album_id"], tracks, next(i for i, t in enumerate(tracks) if t["id"] == tr["id"]),
                              auto=True)
             log.info("Attached to pre-loaded album %s", tr["album_id"])
+            self._save_spin()
         return song_id
 
     def _apply_position(self, pos: float | None, clip_start: int) -> bool:
@@ -297,7 +319,8 @@ class App:
         try:
             if self.spin:
                 self._spin_file.write_text(json.dumps(
-                    {"album_id": self.spin.album_id, "track_id": self.spin.cur["id"], "saved": time.time()}))
+                    {"album_id": self.spin.album_id, "track_id": self.spin.cur["id"], "saved": time.time(),
+                     "auto": self.spin.auto, "side_ended": self.spin.at_side_end}))
             else:
                 self._spin_file.unlink(missing_ok=True)
         except OSError as exc:
@@ -312,8 +335,9 @@ class App:
                 return None
         except (OSError, ValueError, KeyError, StopIteration):
             return None
-        spin = Spin(saved["album_id"], tracks, i)
+        spin = Spin(saved["album_id"], tracks, i, auto=bool(saved.get("auto")))
         spin.stopped_at = self.clock()     # the next start resumes this track, position unknown
+        spin.at_side_end = bool(saved.get("side_ended"))
         return spin
 
     def start_spin(self, album_id: int, side: str = "", pos: int = 1) -> bool:
@@ -324,6 +348,7 @@ class App:
         i = next((k for k, t in enumerate(tracks)
                   if t["side"].upper() == (side or tracks[0]["side"]).upper() and t["pos"] == pos), 0)
         self.spin = Spin(album_id, tracks, i)
+        self._save_spin()
         if self.det.playing:                    # needle is already down: position unknown until the next gap
             self.spin.stopped_at = None
             self._reset_learning()
@@ -409,9 +434,14 @@ class App:
                 "index": sp.i, "auto": sp.auto, "mismatch": sp.mismatch,
                 "tracks": sp.tracks, **sp.info(self.clock(), time.time())}
 
-    def status(self) -> dict:
+    def status(self, tracks: bool = True) -> dict:
+        spin = self.spin_status()
+        if spin and not tracks:
+            del spin["tracks"]
         return {"playing": self.det.playing, "unknown": self.unknown, "now": self.now_info(),
-                "library": self.lib.size(), "learn": self.s.learn, "spin": self.spin_status()}
+                "library": self.lib.size(), "learn": self.s.learn, "spin": spin,
+                # for set-up: how loud the input is now, and how loud it must be for a record to start
+                "level": round(self.level), "start_level": round(self.det.start_level)}
 
     def refresh_now(self) -> None:
         """Send the current song to Home Assistant (new song, or after an edit in the UI)."""
