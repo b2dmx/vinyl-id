@@ -109,3 +109,17 @@ def test_lp_covers_can_be_switched_off(tmp_path):
     assert lib.album(album)["lp_covers"] == 1
     lib.set_lp_covers(album, False)
     assert lib.album(album)["lp_covers"] == 0 and lib.albums()[0]["lp_covers"] == 0
+
+
+def test_shazam_title_inside_the_sleeve_title_matches(tmp_path):
+    lib = Library(tmp_path)
+    tracks = [{"n": 1, "side": "A", "pos": 1, "title": "Staff Credits"},
+              {"n": 2, "side": "A", "pos": 2, "title": "Battle (Day)"},
+              {"n": 3, "side": "A", "pos": 3, "title": "Battle (Night)"},
+              {"n": 4, "side": "B", "pos": 1, "title": "Sand-Seal Race"},
+              {"n": 5, "side": "B", "pos": 2, "title": "Sand-Seal Race: Win"}]
+    lib.add_album_from_release("Composer", "Box", "mb", tracks)
+    assert lib.find_track("Credits", "Composer")["title"] == "Staff Credits"
+    assert lib.find_track("Sand-Seal Race", "Composer")["pos"] == 1          # exact beats contained
+    assert lib.find_track("Race", "Composer") is None                        # too short to mean anything
+    assert lib.find_track("Seal Race", "Composer") is None                   # fits two tracks: no guess

@@ -78,6 +78,21 @@ def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", s)
 
 
+def _same_title(a: str, b: str) -> bool:
+    """Titles already through _norm. Shazam says "Credits" where the sleeve says "Staff Credits":
+    one inside the other counts, unless it is too short to mean anything."""
+    return a == b or (min(len(a), len(b)) >= 5 and (a in b or b in a))
+
+
+def _pick(tracks: list, want: str):
+    """The track with this title: an exact one, else the only one that contains it (or is contained)."""
+    exact = [t for t in tracks if _norm(t["title"]) == want]
+    if exact:
+        return exact[0]
+    close = [t for t in tracks if _same_title(_norm(t["title"]), want)]
+    return close[0] if len(close) == 1 else None
+
+
 class TrackMixin:
     """Track lists for pre-loaded albums (side, position, title, length)."""
 
@@ -141,9 +156,7 @@ class TrackMixin:
                 return t
         s = self.song(song_id)
         if s:
-            for t in tracks:
-                if _norm(t["title"]) == _norm(s.title):
-                    return t
+            return _pick(tracks, _norm(s.title))
         return None
 
     @locked
@@ -154,13 +167,11 @@ class TrackMixin:
             "JOIN albums a ON a.id = t.album_id LEFT JOIN songs s ON s.album_id = a.id "
             "GROUP BY t.id ORDER BY lp DESC NULLS LAST").fetchall()
         want, who = _norm(title), _norm(artist)
-        for r in rows:
-            have = _norm(r["artist"])
-            if _norm(r["title"]) == want and (not who or not have or who in have or have in who):
-                return dict(self.db.execute(
-                    "SELECT id, album_id, n, disc, side, pos, title, length, song_id FROM tracks WHERE id=?",
-                    (r["id"],)).fetchone())
-        return None
+        by = [r for r in rows if not who or not (have := _norm(r["artist"])) or who in have or have in who]
+        r = _pick(by, want)
+        return dict(self.db.execute(
+            "SELECT id, album_id, n, disc, side, pos, title, length, song_id FROM tracks WHERE id=?",
+            (r["id"],)).fetchone()) if r else None
 
     @locked
     def attach_song(self, song_id: int, track: dict) -> int:

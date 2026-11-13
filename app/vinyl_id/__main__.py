@@ -58,16 +58,19 @@ class App:
         self._task: asyncio.Task | None = None  # the identification in flight (kept so it isn't dropped)
         self._last_level: tuple[float, float] = (0.0, -999.0)
         self._art_name: str | None = None      # the cover file now_info() picked
+        self._quick = False                    # the next identification may use a short sample
         self.spin: Spin | None = self._load_spin()   # 'now spinning': the album and track being played
         self.song_start = 0.0                  # block index where the current song began (learning is stored relative to it)
         self.start_exact = False               # True once Shazam or a local match told us the real position
 
     # --- scheduling ------------------------------------------------------------
-    def _schedule(self, delay: float) -> None:
-        """Identify again after `delay`. Anything still being identified is now out of date."""
+    def _schedule(self, delay: float, quick: bool = False) -> None:
+        """Identify again after `delay`. Anything still being identified is now out of date.
+        quick: a new song has just begun, so try on a short sample first to name it sooner."""
         self.next_check = self.clock() + delay
         self.buf.clear()
         self.epoch += 1
+        self._quick = quick
 
     def _bg(self, fn, *args) -> None:
         """Run slow work off the audio loop, and say so in the log if it fails."""
@@ -130,7 +133,7 @@ class App:
                         self._save_spin()
                     else:
                         self._spin_sync()
-                self._schedule(self.s.settle_seconds)
+                self._schedule(self.s.settle_seconds, quick=True)
             elif ev is Event.TRACK_CHANGE:
                 log.info("Track change detected")
                 self._commit_learning(trim_tail=True)
@@ -138,7 +141,7 @@ class App:
                 self._mark_start()
                 if self.spin and self.spin.track_change(self.clock()):
                     self._spin_sync()
-                self._schedule(self.s.settle_seconds)
+                self._schedule(self.s.settle_seconds, quick=True)
             elif ev is Event.STOPPED:
                 log.info("Record stopped")
                 self._commit_learning(trim_tail=True)
@@ -155,15 +158,20 @@ class App:
                 self._commit_learning(trim_tail=True, extra_trim=LENGTH_GRACE)
                 self._clear_recent()
                 self._spin_sync()
-                self._schedule(self.s.settle_seconds)
+                self._schedule(self.s.settle_seconds, quick=True)
 
             if (self.det.playing and not self.busy and self.next_check is not None
-                    and self.clock() >= self.next_check and len(self.buf) == self.buf.maxlen):
+                    and self.clock() >= self.next_check and len(self.buf) >= self._blocks_needed()):
                 self.busy = True
                 clip_start = self.block_i - len(self.buf)
-                self._task = asyncio.create_task(self._identify(np.concatenate(self.buf), clip_start))
+                self._task = asyncio.create_task(
+                    self._identify(np.concatenate(self.buf), clip_start, quick=self._quick))
 
-    async def _identify(self, pcm: np.ndarray, clip_start: int) -> None:
+    def _blocks_needed(self) -> int:
+        quick = int(self.s.quick_sample_seconds / BLOCK_SECONDS)
+        return min(quick, self.buf.maxlen) if self._quick else self.buf.maxlen
+
+    async def _identify(self, pcm: np.ndarray, clip_start: int, quick: bool = False) -> None:
         epoch = self.epoch
         try:
             hs = await asyncio.to_thread(hashes, pcm)
@@ -174,6 +182,11 @@ class App:
             else:
                 track = await self.rec.identify(pcm)
                 if epoch != self.epoch:
+                    return
+                if track is None and quick:
+                    # too little to go on: keep collecting and ask again with the full sample
+                    log.info("Not recognized from a short sample; trying a longer one")
+                    self._quick, self.next_check = False, self.clock()
                     return
                 if track is None:
                     log.info("Not recognized; retrying in %.0f s", self.s.retry_seconds)
@@ -316,7 +329,7 @@ class App:
             self._reset_learning()
             self._mark_start()
             self._spin_sync()
-            self._schedule(self.s.settle_seconds)
+            self._schedule(self.s.settle_seconds, quick=True)
         return True
 
     def stream_title(self) -> tuple[str, str]:
@@ -330,7 +343,7 @@ class App:
         self.spin = None
         self._save_spin()
         if self.det.playing:
-            self._schedule(self.s.settle_seconds)
+            self._schedule(self.s.settle_seconds, quick=True)
             self.refresh_now()
 
     def _clear_recent(self) -> None:
@@ -414,7 +427,7 @@ class App:
             self._reset_learning()
             self.pub.track(None)
             if self.det.playing:
-                self._schedule(self.s.settle_seconds)
+                self._schedule(self.s.settle_seconds, quick=True)
 
     def _forget_current_threadsafe(self) -> None:
         if self.loop and self.current is not None:

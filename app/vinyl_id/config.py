@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 
 APP_NAME = "Vinyl ID"
-VERSION = "0.6.4"
+VERSION = "0.6.5"
 SIGNATURE = f"{APP_NAME} v{VERSION} by Goobis"
 AI_NOTE = "AI was used to help develop this application"
 
@@ -35,7 +35,8 @@ class Settings:
 
     # Recognition
     sample_seconds: float = _f("SAMPLE_SECONDS", 12)
-    settle_seconds: float = _f("SETTLE_SECONDS", 6)      # wait after start / track change before sampling
+    quick_sample_seconds: float = _f("QUICK_SAMPLE_SECONDS", 5)   # a new song is first tried on this much audio
+    settle_seconds: float = _f("SETTLE_SECONDS", 3)      # wait after start / track change before sampling
     recheck_seconds: float = _f("RECHECK_SECONDS", 150)  # catches gapless track changes
     retry_seconds: float = _f("RETRY_SECONDS", 30)       # when a sample wasn't recognized
 
