@@ -208,6 +208,8 @@ class Library(TrackMixin):
             self.db.execute("ALTER TABLE albums ADD COLUMN mbid TEXT")
         if "disc" not in self._columns("tracks"):
             self.db.execute("ALTER TABLE tracks ADD COLUMN disc INTEGER NOT NULL DEFAULT 1")
+        if "lp_covers" not in self._columns("albums"):   # box sets: show each LP's own cover
+            self.db.execute("ALTER TABLE albums ADD COLUMN lp_covers INTEGER NOT NULL DEFAULT 1")
         if "hashes" not in self._columns("songs"):   # a kept count: counting the rows scans every song's hashes
             self.db.execute("ALTER TABLE songs ADD COLUMN hashes INTEGER NOT NULL DEFAULT 0")
             counts = self.db.execute("SELECT COUNT(*), song_id FROM hashes GROUP BY song_id").fetchall()
@@ -358,7 +360,7 @@ class Library(TrackMixin):
     def albums(self, q: str = "") -> list[dict]:
         like = f"%{q}%"
         rows = self.db.execute(
-            "SELECT a.id, a.artist, a.album, a.art_file IS NOT NULL has_art, a.art_locked, "
+            "SELECT a.id, a.artist, a.album, a.art_file IS NOT NULL has_art, a.art_locked, a.lp_covers, "
             "COUNT(s.id) songs, MAX(s.last_played) last_played, "
             "(SELECT COUNT(*) FROM tracks t WHERE t.album_id = a.id) tracks FROM albums a "
             "LEFT JOIN songs s ON s.album_id = a.id "
@@ -368,8 +370,14 @@ class Library(TrackMixin):
 
     @locked
     def album(self, album_id: int) -> dict | None:
-        r = self.db.execute("SELECT id, artist, album FROM albums WHERE id=?", (album_id,)).fetchone()
+        r = self.db.execute("SELECT id, artist, album, lp_covers FROM albums WHERE id=?", (album_id,)).fetchone()
         return dict(r) if r else None
+
+    @locked
+    def set_lp_covers(self, album_id: int, on: bool) -> None:
+        """Whether a box set shows each LP's own cover (when it has one) or always the album's."""
+        self.db.execute("UPDATE albums SET lp_covers=? WHERE id=?", (int(on), album_id))
+        self.db.commit()
 
     @locked
     def album_songs(self, album_id: int) -> list[dict]:

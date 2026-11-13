@@ -178,7 +178,8 @@ async function albumDialog(id) {
       <label class="field"><span>Artist</span><input id="f-artist" value="${esc(a && a.artist)}"></label></div></div>
     <div class="row"><button class="btn tonal" id="cover">Change cover</button>
       <button class="btn tonal" id="find">${tracks.length ? "Pick another pressing" : "Find track list"}</button></div>
-    ${discs.length ? `<div><h3>A cover for each LP</h3><p class="muted">Shown while that LP plays. Without one, the album cover is used.</p>
+    ${discs.length ? `<div><h3>A cover for each LP</h3><p class="muted">Pick an LP to add its sleeve. Then choose which cover shows while this album plays.</p>
+      <div class="row"><button class="btn ${a && a.lp_covers ? "text" : "tonal"}" data-lp="0">Album cover</button><button class="btn ${a && a.lp_covers ? "tonal" : "text"}" data-lp="1">Each LP's cover</button></div>
       <div class="row">${discs.map((d) => `<button class="btn ${discArt.includes(d) ? "tonal" : "text"}" data-disc="${d}">LP ${d}${discArt.includes(d) ? " · set" : ""}</button>`).join("")}</div>
       <input type="file" id="disc-file" accept="image/*" hidden></div>` : ""}
     ${tracks.length ? `<div><h3>Tracks</h3><div class="list" style="gap:2px">${rows}</div></div>` : `<p class="muted">No track list yet. Find the pressing to follow it side by side.</p>`}`,
@@ -192,6 +193,9 @@ async function albumDialog(id) {
   $("#cover").onclick = () => coverDialog(id, a);
   $("#find").onclick = () => addAlbumDialog(id, a ? `${a.artist} ${a.album}` : "");
   let disc = 0;
+  dlg.querySelectorAll("[data-lp]").forEach((b) => (b.onclick = async () => {
+    try { await api(`albums/${id}/lp-covers`, { method: "PUT", body: { on: b.dataset.lp === "1" } }); await loadAlbums(); refresh(); albumDialog(id); } catch (er) { fail(er); }
+  }));
   dlg.querySelectorAll("[data-disc]").forEach((b) => (b.onclick = () => { disc = Number(b.dataset.disc); $("#disc-file").click(); }));
   if ($("#disc-file")) $("#disc-file").onchange = async (e) => {
     const f = e.target.files[0]; if (!f) return;

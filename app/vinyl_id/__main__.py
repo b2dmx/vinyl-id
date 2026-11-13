@@ -369,7 +369,8 @@ class App:
         elif song.album_id:
             disc = (self.lib.track_in_album(song.album_id, song.id) or {}).get("disc")
         base = f"{self.s.public_url}/api/albums/{song.album_id}"
-        if disc and (name := self.lib.disc_art_file(song.album_id, disc)):
+        use_lp = disc and (self.lib.album(song.album_id) or {}).get("lp_covers")
+        if use_lp and (name := self.lib.disc_art_file(song.album_id, disc)):
             path = f"/discs/{disc}/art"
         else:
             name, path = song.art_file, "/art"

@@ -121,6 +121,13 @@ def build(app: App) -> web.Application:
         app.refresh_now()
         return web.json_response({"ok": True})
 
+    @routes.put("/api/albums/{id:\\d+}/lp-covers")
+    async def set_lp_covers(req):
+        """{"on": true} = show each LP's own cover; false = always the album cover."""
+        lib.set_lp_covers(int(req.match_info["id"]), bool((await req.json())["on"]))
+        app.refresh_now()
+        return web.json_response({"ok": True})
+
     @routes.get("/api/albums/{id:\\d+}/discs")
     async def discs_with_art(req):
         return web.json_response(lib.discs_with_art(int(req.match_info["id"])))

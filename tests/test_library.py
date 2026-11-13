@@ -101,3 +101,11 @@ def test_disc_cover_and_loose_titles(tmp_path):
     lib.set_disc_art(album, 2, b"\xff\xd8\xffdisc2")
     assert lib.discs_with_art(album) == [2]
     assert lib.art_file_bytes(lib.disc_art_file(album, 2)) == b"\xff\xd8\xffdisc2"
+
+
+def test_lp_covers_can_be_switched_off(tmp_path):
+    lib = Library(tmp_path)
+    album = lib.add_album("Band", "Box")
+    assert lib.album(album)["lp_covers"] == 1
+    lib.set_lp_covers(album, False)
+    assert lib.album(album)["lp_covers"] == 0 and lib.albums()[0]["lp_covers"] == 0
