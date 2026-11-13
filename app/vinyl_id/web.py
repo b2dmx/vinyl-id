@@ -274,7 +274,16 @@ def build(app: App) -> web.Application:
             raise web.HTTPForbidden(text="This address may not change the library (see EDIT_FROM / Also allow edits from)")
         return await handler(req)
 
-    wa = web.Application(client_max_size=10 * 1024 * 1024, middlewares=[edits_guard, bad_request])
+    @web.middleware
+    async def fresh_page(req, handler):
+        """The page and its script are checked with the server on every load, so an update
+        never leaves a browser with the old page and the new script."""
+        resp = await handler(req)
+        if req.path == "/" or req.path.startswith("/ui/"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+    wa = web.Application(client_max_size=10 * 1024 * 1024, middlewares=[edits_guard, bad_request, fresh_page])
     wa.add_routes(routes)
     if UI_DIR.exists():
         wa.router.add_get("/", lambda _: web.FileResponse(UI_DIR / "index.html"))

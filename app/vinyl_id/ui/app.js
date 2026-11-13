@@ -272,6 +272,7 @@ async function loadLeftovers() {
   let left = [];
   try { left = await api("leftovers"); } catch (e) { return; }
   const el = $("#leftovers");
+  if (!el) return;
   el.hidden = !left.length;
   if (!left.length) return;
   el.innerHTML = `<div class="section-head"><h2>Covers of removed albums</h2></div>
@@ -364,7 +365,7 @@ async function refresh() {
     status = s;
     $("#sig").textContent = s.signature;
     $("#ai").textContent = s.ai_note;
-    if (s.library_mb !== undefined) {
+    if (s.library_mb !== undefined && $("#size")) {
       const size = s.library_mb < 10 ? s.library_mb.toFixed(1) : Math.round(s.library_mb);
       $("#size").textContent = s.library_full
         ? `The library is full (${size} of ${s.library_limit_mb} MB): new songs are not learned. Forget songs you don't need, or raise the limit in the app's settings.`
