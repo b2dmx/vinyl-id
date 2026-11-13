@@ -79,3 +79,30 @@ async def test_setup_form(hass, aioclient_mock):
     r = await hass.config_entries.flow.async_configure(r["flow_id"], {CONF_URL: URL + "/", CONF_SPEAKER: SPEAKER})
     assert r["type"] is FlowResultType.CREATE_ENTRY
     assert r["data"] == {CONF_URL: URL} and r["options"] == {CONF_SPEAKER: SPEAKER}
+
+
+async def test_listener_is_hidden_and_shown_again(hass, aioclient_mock):
+    from homeassistant.helpers import entity_registry as er
+
+    reg = er.async_get(hass)
+    ear = reg.async_get_or_create("media_player", "music_assistant", "ear", suggested_object_id="vinyl_id_listener",
+                                  original_name="Vinyl ID Listener").entity_id
+    mine = reg.async_get_or_create("media_player", "music_assistant", "mine", suggested_object_id="hidden_by_me").entity_id
+    reg.async_update_entity(mine, hidden_by=er.RegistryEntryHider.USER)
+
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status())
+    r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    r = await hass.config_entries.flow.async_configure(r["flow_id"], {CONF_URL: URL, "listener": ear})
+    await hass.async_block_till_done()
+    entry = r["result"]
+    assert reg.async_get(ear).hidden_by is er.RegistryEntryHider.INTEGRATION
+
+    r = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(r["flow_id"], {"listener": mine})
+    await hass.async_block_till_done()
+    assert reg.async_get(ear).hidden_by is None                                 # shown again
+    assert reg.async_get(mine).hidden_by is er.RegistryEntryHider.USER          # your own choice is kept
+
+    assert await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    assert reg.async_get(mine).hidden_by is er.RegistryEntryHider.USER

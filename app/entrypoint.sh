@@ -13,7 +13,7 @@ if [ -f /data/options.json ]; then
   ha_env="$(python /app/vinyl_id/ha_options.py)"   # on its own line so a failure stops the start
   eval "$ha_env"
 fi
-NAME="${RECEIVER_NAME:-Vinyl ID}"
+NAME="${RECEIVER_NAME:-Vinyl ID Listener}"
 
 # Run a receiver in the background and start it again if it ever exits,
 # so Vinyl ID is never left listening to a speaker nothing plays into.

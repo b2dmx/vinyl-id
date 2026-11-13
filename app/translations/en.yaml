@@ -2,7 +2,7 @@ configuration:
   audio_source:
     name: Audio source
     description: >-
-      How the record reaches Vinyl ID. Sendspin or AirPlay: Vinyl ID appears as a
+      How the record reaches Vinyl ID. Sendspin or AirPlay: Vinyl ID Listener appears as a
       (silent) speaker in Music Assistant. Stream: read the address below directly.
   audio_input:
     name: Stream address
@@ -19,7 +19,7 @@ configuration:
       shown by the Input Level sensor.
   receiver_name:
     name: Speaker name
-    description: The name Vinyl ID uses in Music Assistant.
+    description: The name of the silent speaker Vinyl ID listens through, as shown in Music Assistant. Send the record to it; it is not the player to look at.
   edit_from:
     name: Also allow edits from
     description: >-

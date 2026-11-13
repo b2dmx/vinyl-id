@@ -12,7 +12,7 @@ services:
       #   airplay  → appears in Music Assistant as an AirPlay speaker
       #   stream   → reads AUDIO_INPUT directly (stream URL, device or file)
       AUDIO_SOURCE: sendspin
-      RECEIVER_NAME: Vinyl ID
+      RECEIVER_NAME: Vinyl ID Listener
       AUDIO_INPUT: ""          # only used with AUDIO_SOURCE: stream
       # MQTT broker (Mosquitto add-on on the HA Green)
       MQTT_HOST: homeassistant.local   # your broker's address

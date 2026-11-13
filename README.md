@@ -36,6 +36,12 @@ Needs Home Assistant with the Mosquitto broker.
 
 **On a NAS or server instead:** fill in `docker-compose.yml` (your MQTT broker and login, `PUBLIC_URL`), then run `docker compose up -d --build`. Home Assistant finds it through MQTT and the same entities appear. Open `http://<your-nas>:8095` for the library page. Anyone on your network can open it and, unless you set `EDIT_FROM` to the addresses allowed to make changes, edit your library.
 
+## Which entity is which
+
+- **Record Player** (from the integration) is the one to look at and put on dashboards: song, cover, progress, and your speaker's volume.
+- **Record Playing**, **Now Playing** and **Album Art** (from the app) carry the same information for automations and displays.
+- **Vinyl ID Listener** is a silent speaker in Music Assistant. It is how the record reaches the app, so it says "playing" whenever the line-in is on, even with no record. Send the record to it, then ignore it. The integration hides it from dashboards for you.
+
 ## Onboarding
 
 Drop the needle. **Record Playing** turns on and **Now Playing** shows the song. If Shazam doesn't know it, name it in the sidebar and Vinyl ID learns it.
@@ -59,6 +65,6 @@ The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.6.3 by Goobis<br>
+  Vinyl ID v0.6.4 by Goobis<br>
   AI was used to help develop this application
 </p>

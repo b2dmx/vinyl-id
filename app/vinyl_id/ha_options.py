@@ -35,7 +35,7 @@ env = {
     "AUDIO_INPUT": opts.get("audio_input") or "",
     "LEARN": str(opts.get("learn", True)).lower(),
     "SIGNAL_THRESHOLD_DB": str(opts.get("signal_threshold_db", -50)),
-    "RECEIVER_NAME": opts.get("receiver_name", "Vinyl ID"),
+    "RECEIVER_NAME": opts.get("receiver_name", "Vinyl ID Listener"),
     "DATA_DIR": "/data",
     "WEB_PORT": "8780",
     "PUBLIC_URL": f"http://{lan_ip()}:8780",

@@ -6,11 +6,13 @@
         "description": "Adds a Record Player that shows the song, cover and progress of the record the Vinyl ID app hears.",
         "data": {
           "url": "Address of the Vinyl ID app",
-          "speaker": "Speaker that plays your record (optional)"
+          "speaker": "Speaker that plays your record (optional)",
+          "listener": "The app's silent speaker in Music Assistant (optional)"
         },
         "data_description": {
           "url": "Leave as it is when the app runs on this Home Assistant.",
-          "speaker": "The Record Player's volume and power buttons control this speaker. Leave empty to only show what is playing."
+          "speaker": "The Record Player's volume and power buttons control this speaker. Leave empty to only show what is playing.",
+          "listener": "Vinyl ID listens through a silent speaker, usually named Vinyl ID Listener. It is not the player to look at, so it is hidden from dashboards here. It keeps working and stays under Settings > Entities."
         }
       }
     },
@@ -26,10 +28,12 @@
       "init": {
         "title": "Record Player",
         "data": {
-          "speaker": "Speaker that plays your record (optional)"
+          "speaker": "Speaker that plays your record (optional)",
+          "listener": "The app's silent speaker in Music Assistant (optional)"
         },
         "data_description": {
-          "speaker": "The Record Player's volume and power buttons control this speaker. Leave empty to only show what is playing."
+          "speaker": "The Record Player's volume and power buttons control this speaker. Leave empty to only show what is playing.",
+          "listener": "Vinyl ID listens through a silent speaker, usually named Vinyl ID Listener. It is not the player to look at, so it is hidden from dashboards here. It keeps working and stays under Settings > Entities."
         }
       }
     }

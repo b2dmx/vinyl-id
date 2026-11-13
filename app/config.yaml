@@ -1,5 +1,5 @@
 name: Vinyl ID
-version: "0.6.3"
+version: "0.6.4"
 slug: vinyl_id
 description: Shows what's playing on your record player, with its cover, in Home Assistant.
 url: https://github.com/b2dmx/vinyl-id
@@ -19,7 +19,7 @@ options:
   audio_input: ""
   learn: true
   signal_threshold_db: -50
-  receiver_name: Vinyl ID
+  receiver_name: Vinyl ID Listener
 schema:
   audio_source: list(sendspin|airplay|stream)
   audio_input: str?
