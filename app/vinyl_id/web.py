@@ -209,6 +209,7 @@ def build(app: App) -> web.Application:
         if b.get("album_id"):               # give an album you already have its track list
             album_id = int(b["album_id"])
             lib.add_tracks(album_id, mbid, rel["tracks"])
+            app.tracks_changed(album_id)
         else:
             album_id = lib.add_album_from_release(rel["artist"], rel["album"], mbid, rel["tracks"])
         if not lib.album_has_art(album_id):
@@ -229,6 +230,7 @@ def build(app: App) -> web.Application:
         except (KeyError, AttributeError, ValueError, TypeError):
             raise web.HTTPBadRequest(text='Send {"lengths": {"A1": "2:01", ...}}') from None
         unknown = lib.set_track_lengths(int(req.match_info["id"]), lengths)
+        app.tracks_changed(int(req.match_info["id"]))
         app.refresh_now()
         return web.json_response({"set": len(lengths) - len(unknown), "not_on_album": unknown})
 

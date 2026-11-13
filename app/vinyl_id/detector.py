@@ -17,6 +17,7 @@ from .config import BLOCK_SECONDS, Settings
 log = logging.getLogger(__name__)
 LOG_DIPS_FROM = 1.0     # dips at least this long are logged, so the settings can be tuned
 DIGITAL_SILENCE = -88   # a record's groove is never this quiet: the stream itself dropped out
+POP_BLOCKS = 2          # this many loud blocks in a row (0.5 s) inside quiet are a click or pop, not music
 
 
 class Event(Enum):
@@ -33,6 +34,7 @@ class Detector:
         self._quiet = 0.0      # seconds of continuous quiet (while playing)
         self._dip = 0.0        # seconds of the current dip
         self._dip_lo = self._dip_hi = 0.0   # quietest and loudest block of the current dip
+        self._pop = 0          # loud blocks in a row since the last quiet one
         # Over a network receiver, lost audio arrives as exact silence. That is never a gap.
         self._dropouts = s.audio_input_format == "pulse"
 
@@ -63,11 +65,17 @@ class Detector:
                 return Event.STARTED
             return None
 
+        # A click or pop in a gap or in the run-out groove: it neither ends the gap nor keeps the record going
+        self._pop = 0 if quiet else self._pop + 1
+        pop = not quiet and self._pop <= POP_BLOCKS and self._quiet > 0
+
         # Playing: nothing but quiet for a long time means the record stopped.
-        self._quiet = self._quiet + dt if quiet else 0.0
+        self._quiet = self._quiet + dt if quiet or pop else 0.0
         if self._quiet >= s.stop_seconds:
             self.playing, self._loud, self._dip = False, 0.0, 0.0
             return Event.STOPPED
+        if pop:
+            return None
 
         if quiet:
             if self._dip == 0.0:

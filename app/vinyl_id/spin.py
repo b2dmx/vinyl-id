@@ -72,7 +72,8 @@ class Spin:
         if gone > EXPIRE_AFTER:
             return "expired"
         nxt = self.first_of_next_side()
-        if gone <= SIDE_FLIP_WINDOW and nxt is not None and self.at_side_end:
+        ended, self.at_side_end = self.at_side_end, False
+        if gone <= SIDE_FLIP_WINDOW and nxt is not None and ended:
             self.i, self.start = nxt, now
             return "flip"
         self.start = None

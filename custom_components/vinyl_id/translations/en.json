@@ -15,8 +15,8 @@
         "data_description": {
           "url": "Leave as it is when the app runs on this Home Assistant. For the app on another machine: an address like http://192.168.1.50:8780.",
           "speaker": "The speaker or amp you listen to records on. The Record Player's volume and power buttons control it. Leave empty to only show what is playing.",
-          "listener": "The Music Assistant speaker named Vinyl ID Listener. It is hidden from dashboards, since it is not the player to look at. It keeps working and stays under Settings > Entities.",
-          "source_player": "The Music Assistant player your turntable is plugged into, for example an Apollo CAST. When that player is idle, Vinyl ID starts its line-in and connects the silent speaker to it, also after restarts. It never takes the player away from other music.",
+          "listener": "The speaker the Vinyl ID app created in Music Assistant, named Vinyl ID Listener unless you renamed it in the app. It is hidden from dashboards, since it is not the player to look at. It keeps working and stays under Settings > Entities.",
+          "source_player": "The Music Assistant player your turntable is plugged into, for example an Apollo CAST. When that player is idle, Vinyl ID starts its line-in and connects the silent speaker to it, also after restarts. It never takes the player away from other music. Fill in this, the line-in source and the silent speaker together: Vinyl ID keeps the record connected only when it has all three.",
           "source_name": "The name of the line-in in that player's list of sources, exactly as written there. Open the player in Home Assistant to see the list.",
           "monitor": "Only for a player that has a setting to play its line-in either directly or in sync with other rooms, direct listed first. Vinyl ID then picks direct while only that player listens, and in sync when you group other speakers onto the record. Leave empty if your player has no such setting."
         }
@@ -52,8 +52,8 @@
         },
         "data_description": {
           "speaker": "The speaker or amp you listen to records on. The Record Player's volume and power buttons control it. Leave empty to only show what is playing.",
-          "listener": "The Music Assistant speaker named Vinyl ID Listener. It is hidden from dashboards, since it is not the player to look at. It keeps working and stays under Settings > Entities.",
-          "source_player": "The Music Assistant player your turntable is plugged into, for example an Apollo CAST. When that player is idle, Vinyl ID starts its line-in and connects the silent speaker to it, also after restarts. It never takes the player away from other music.",
+          "listener": "The speaker the Vinyl ID app created in Music Assistant, named Vinyl ID Listener unless you renamed it in the app. It is hidden from dashboards, since it is not the player to look at. It keeps working and stays under Settings > Entities.",
+          "source_player": "The Music Assistant player your turntable is plugged into, for example an Apollo CAST. When that player is idle, Vinyl ID starts its line-in and connects the silent speaker to it, also after restarts. It never takes the player away from other music. Fill in this, the line-in source and the silent speaker together: Vinyl ID keeps the record connected only when it has all three.",
           "source_name": "The name of the line-in in that player's list of sources, exactly as written there. Open the player in Home Assistant to see the list.",
           "monitor": "Only for a player that has a setting to play its line-in either directly or in sync with other rooms, direct listed first. Vinyl ID then picks direct while only that player listens, and in sync when you group other speakers onto the record. Leave empty if your player has no such setting."
         }

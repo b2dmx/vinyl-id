@@ -18,8 +18,9 @@ configuration:
   signal_threshold_db:
     name: Signal threshold (dB)
     description: >-
-      The level of your turntable when it is on but no record is playing. The Vinyl ID page shows
-      the input level: use that number. A record starts once the sound is 12 dB above it.
+      The level of your turntable when it is on but no record is playing. The bottom of the Vinyl ID
+      page shows the input level: use the number you see with the needle up. A record starts once
+      the sound is 12 dB above it.
   receiver_name:
     name: Listener name
     description: >-
@@ -35,4 +36,4 @@ configuration:
     description: >-
       Stop learning new songs once the library takes this much space. 0 means no limit.
       Covers and your edits are still saved, and songs already learned keep working.
-      The Vinyl ID page shows the current size.
+      The Vinyl ID page shows the current size. Forgetting songs frees space again.

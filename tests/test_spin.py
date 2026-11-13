@@ -190,3 +190,27 @@ def test_song_from_another_album_asks_instead_of_learning(tmp_path, monkeypatch)
     assert app.spin is not None and app.spin.album_id == app.lib.albums("Test LP")[0]["id"]   # still following
     stray = app.lib.db.execute("SELECT id FROM songs WHERE title='Something Else'").fetchone()
     assert stray is None or app.lib.hash_count(stray[0]) == 0                                 # and never learned it
+
+
+def test_side_end_mark_is_used_once():
+    """After a flip the side-end mark is gone, so a restart mid-side resumes instead of flipping again."""
+    sp = Spin(1, [{"id": i, "side": s, "pos": 1, "title": s, "length": 60} for i, s in enumerate("ABC")], 0)
+    sp.stopped(100.0)
+    assert sp.at_side_end and sp.started(130.0) == "flip" and sp.cur["side"] == "B"
+    assert not sp.at_side_end
+    sp.stopped_at = 200.0                    # as after a restart mid-side
+    assert sp.started(230.0) == "resume" and sp.cur["side"] == "B"
+
+
+def test_unknown_song_after_a_known_one_is_not_learned_into_it(tmp_path, monkeypatch):
+    silence = lambda s: np.zeros(SAMPLE_RATE * s, np.int16)       # noqa: E731
+    side = np.concatenate([fake_song(11, 60), silence(3), fake_song(12, 60), silence(50)])
+    calls = {"n": 0}
+
+    async def first_only(self, pcm):
+        calls["n"] += 1
+        return Track("Song One", "The Band", "", "", "shz1", offset=0.0) if calls["n"] == 1 else None
+
+    app = _run(tmp_path, monkeypatch, side, first_only)
+    sid = app.lib.db.execute("SELECT id FROM songs WHERE title='Song One'").fetchone()[0]
+    assert app.lib.hash_count(sid) <= len(hashes(fake_song(11, 60))) * 1.2     # song two is not in there

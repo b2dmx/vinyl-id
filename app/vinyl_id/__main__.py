@@ -125,6 +125,7 @@ class App:
         self.pub.library(self.lib.size())
         async for block in ffmpeg_blocks(self.s.audio_input, self.s.audio_input_format):
             if block is None:                    # the input dropped: a record can't still be playing
+                self.level = -90.0
                 if self.det.input_lost():
                     log.info("Record stopped (the audio input went away)")
                     self._record_stopped()
@@ -158,8 +159,14 @@ class App:
                 self._commit_learning(trim_tail=True)
                 self._clear_recent()
                 self._mark_start()
+                if self.spin:
+                    self.spin.mismatch = None            # a new track is a new chance to match the album
                 if self.spin and self.spin.track_change(self.clock()):
                     self._spin_sync()
+                else:
+                    # Not known what this is yet. It is not the previous song any more, so nothing
+                    # heard from here on may be learned into that one.
+                    self.current = None
                 self._schedule(self.s.settle_seconds, quick=True)
             elif ev is Event.STOPPED:
                 log.info("Record stopped")
@@ -334,7 +341,7 @@ class App:
             i = next(k for k, t in enumerate(tracks) if t["id"] == saved["track_id"])
             if time.time() - saved["saved"] > EXPIRE_AFTER:
                 return None
-        except (OSError, ValueError, KeyError, StopIteration):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, StopIteration):
             return None
         spin = Spin(saved["album_id"], tracks, i, auto=bool(saved.get("auto")))
         spin.stopped_at = self.clock()     # the next start resumes this track, position unknown
@@ -452,8 +459,23 @@ class App:
         if info:
             self.pub.track(info, self.lib.art_file_bytes(self._art_name) if info["art_url"] else None)
 
+    def tracks_changed(self, album_id: int) -> None:
+        """The followed album's track list was replaced or edited: follow the new one."""
+        if not self.spin or self.spin.album_id != album_id:
+            return
+        tracks, old = self.lib.album_tracks(album_id), self.spin.cur
+        if not tracks:
+            self.end_spin()
+            return
+        self.spin.tracks = tracks
+        self.spin.i = next((k for k, t in enumerate(tracks)
+                            if (t["side"], t["pos"]) == (old["side"], old["pos"])), 0)
+        self._save_spin()
+        self.refresh_now()
+
     def forget(self, song_id: int) -> None:
         self.lib.forget(song_id)
+        self._bg(self.lib.compact)        # give the space back, so a full library can learn again
         self.pub.library(self.lib.size())
         if song_id == self.current:
             self.current = None
@@ -483,7 +505,7 @@ async def main() -> None:
     logging.basicConfig(level=s.log_level, format="%(asctime)s %(levelname)s %(message)s")
     log.info("%s — %s", SIGNATURE, AI_NOTE)
     if not s.audio_input:
-        raise SystemExit("No audio to listen to: with the Stream audio source, set the stream address (AUDIO_INPUT)")
+        raise SystemExit("No audio to listen to: the audio source is Stream, but the Stream address is empty")
     app = App(s)
     runner = await web.serve(app, s.web_port)
     task = asyncio.current_task()

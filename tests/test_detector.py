@@ -77,3 +77,17 @@ def test_soft_passage_is_not_a_gap():
     d = Detector(Settings(signal_threshold_db=-65))
     ev = run(d, -35, 30) + run(d, -50, 8) + run(d, -35, 30) + run(d, -56, 60) + run(d, -35, 5)
     assert ev == [Event.STARTED]          # quiet music keeps the record going and changes nothing
+
+
+def test_a_click_in_the_gap_does_not_hide_the_gap():
+    d = Detector(Settings(signal_threshold_db=-65))
+    ev = run(d, -35, 30) + run(d, -68, 1.5) + run(d, -40, 0.25) + run(d, -68, 1.5) + run(d, -35, 30)
+    assert ev == [Event.STARTED, Event.TRACK_CHANGE]
+
+
+def test_pops_in_the_run_out_groove_do_not_keep_the_record_going():
+    d = Detector(Settings(signal_threshold_db=-65))
+    ev = run(d, -35, 30)
+    for _ in range(40):                      # the needle sits in the run-out groove: a pop every two seconds
+        ev += run(d, -68, 1.75) + run(d, -45, 0.25)
+    assert ev == [Event.STARTED, Event.STOPPED]

@@ -37,7 +37,8 @@ function toast(msg) {
 const fail = (e) => toast(String(e.message || e).slice(0, 160));
 
 const mmss = (s) => { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
-const artUrl = (id) => `api/albums/${id}/art?v=${artBust}`;
+// v changes whenever the cover does (the album list says so), so a stale cover is never shown
+const artUrl = (id) => { const a = albums.find((x) => x.id === id); return `api/albums/${id}/art?v=${a && a.art_v ? a.art_v : artBust}`; };
 const art = (id, has = true) => `<div class="art">${id && has ? `<img src="${artUrl(id)}" alt="" loading="lazy" onerror="this.remove()">` : icon(I.album)}</div>`;
 
 // ---- dialogs ---------------------------------------------------------------
@@ -59,9 +60,7 @@ function renderNow() {
     el.innerHTML = `<div class="now"><div class="art">${icon(I.album)}</div><div class="info">
       <h2 class="title">${s.playing ? "Listening..." : "Nothing playing"}</h2>
       <p class="sub">${s.playing ? (s.unknown ? "Shazam doesn't know this one." : "Working out what's playing.") : "Drop the needle and it shows up here."}</p>
-      ${s.playing || s.level === undefined ? "" : `<p class="muted">${s.level <= -88
-        ? "No sound is reaching Vinyl ID. Check that the record is sent to the Vinyl ID Listener."
-        : `Input level ${s.level} dB. A record starts at ${s.start_level} dB.`}</p>`}
+      ${!s.playing && s.level <= -88 ? `<p class="muted">No sound is reaching Vinyl ID. Check that the record is sent to its silent speaker (Vinyl ID Listener) in Music Assistant.</p>` : ""}
       ${s.unknown ? `<div class="row"><button class="btn tonal" id="nameit">Name it</button></div>` : ""}</div></div>`;
     if (s.unknown) $("#nameit").onclick = () => nameDialog(null);
     return;
@@ -154,7 +153,7 @@ function renderAlbums() {
   $("#albums").innerHTML = albums.map((a) => `<button class="tile" data-id="${a.id}">${art(a.id, a.has_art)}
     <div class="t">${esc(a.album)}</div><div class="a">${esc(a.artist)}</div>
     <div class="chips">${a.tracks ? `<span class="chip tonal">${a.tracks} tracks</span>` : ""}${a.songs ? `<span class="chip">${a.songs} learned</span>` : ""}</div></button>`).join("");
-  document.querySelectorAll(".tile").forEach((b) => (b.onclick = () => albumDialog(Number(b.dataset.id))));
+  $("#albums").querySelectorAll(".tile").forEach((b) => (b.onclick = () => albumDialog(Number(b.dataset.id))));
 }
 
 async function loadAlbums() {
@@ -234,11 +233,15 @@ function lengthsDialog(id, tracks) {
       const t = tracks[Number(inp.dataset.i)], v = inp.value.trim();
       if (!v || v === (t.length ? mmss(t.length) : "")) return;
       if (!/^\d{1,2}:[0-5]\d$/.test(v)) { bad = `${t.side}${t.pos}`; return; }
-      lengths[`${t.side}${t.pos}`] = v;
+      lengths[`${t.side}|${t.pos}`] = v;
     });
     if (bad) return toast(`${bad}: write the length as minutes:seconds, like 3:41`);
     if (!Object.keys(lengths).length) return albumDialog(id);
-    try { await api(`albums/${id}/tracks`, { method: "PATCH", body: { lengths } }); toast("Lengths saved"); refresh(); albumDialog(id); } catch (e) { fail(e); }
+    try {
+      const r = await api(`albums/${id}/tracks`, { method: "PATCH", body: { lengths } });
+      toast(r.not_on_album.length ? `${r.set} saved, ${r.not_on_album.length} could not be matched to a track` : "Lengths saved");
+      refresh(); albumDialog(id);
+    } catch (e) { fail(e); }
   };
 }
 
@@ -284,9 +287,11 @@ async function loadLeftovers() {
   el.querySelectorAll(".left").forEach((tile) => {
     const lid = tile.dataset.id;
     tile.querySelector(".l-del").onclick = () => api(`leftovers/${lid}`, { method: "DELETE" }).then(loadLeftovers, fail);
-    tile.querySelector(".l-use").onclick = () => {
-      dialog("Put this cover on", albums.length
-        ? `<div class="list">${albums.map((a) => `<button class="pick" data-id="${a.id}"><span><b>${esc(a.album)}</b><div class="sub">${esc(a.artist)}</div></span></button>`).join("")}</div>`
+    tile.querySelector(".l-use").onclick = async () => {
+      let all = [];
+      try { all = await api("albums"); } catch (e) { return fail(e); }     // every album, whatever is typed in the search
+      dialog("Put this cover on", all.length
+        ? `<p class="muted">If that album already has a cover, the old one moves here for 30 days.</p><div class="list">${all.map((a) => `<button class="pick" data-id="${a.id}"><span><b>${esc(a.album)}</b><div class="sub">${esc(a.artist)}</div></span></button>`).join("")}</div>`
         : `<p class="muted">You have no albums to put it on.</p>`);
       dlg.querySelectorAll(".pick").forEach((b) => (b.onclick = async () => {
         try { await post(`leftovers/${lid}/restore`, { album_id: Number(b.dataset.id) }); artBust = Date.now(); dlg.close(); toast("Cover put back"); await loadAlbums(); loadLeftovers(); refresh(); } catch (e) { fail(e); }
@@ -355,7 +360,7 @@ function addAlbumDialog(forId = null, preset = "") {
 
 // ---- wiring -------------------------------------------------------------------------------
 // what the Now Playing and Now spinning cards are drawn from
-const sig = (s) => JSON.stringify([s.now && [s.now.id, s.now.title, s.now.track_started_at, s.now.source, s.now.spin_mismatch], s.playing, s.unknown, !s.playing && s.level, s.spin && [s.spin.index, s.spin.album_id, s.spin.mismatch]]);
+const sig = (s) => JSON.stringify([s.now && [s.now.id, s.now.title, s.now.track_started_at, s.now.source, s.now.spin_mismatch], s.playing, s.unknown, !s.playing && s.level <= -88, s.spin && [s.spin.index, s.spin.album_id, s.spin.mismatch]]);
 
 async function refresh() {
   try {
@@ -368,8 +373,9 @@ async function refresh() {
     if (s.library_mb !== undefined && $("#size")) {
       const size = s.library_mb < 10 ? s.library_mb.toFixed(1) : Math.round(s.library_mb);
       $("#size").textContent = s.library_full
-        ? `The library is full (${size} of ${s.library_limit_mb} MB): new songs are not learned. Forget songs you don't need, or raise the limit in the app's settings.`
+        ? `The library is full (${size} of ${s.library_limit_mb} MB): new songs are not learned. Forget songs you don't need, or raise the limit on the app's Configuration tab.`
         : `Library: ${s.library} ${s.library === 1 ? "song" : "songs"}, ${size} MB${s.library_limit_mb ? ` of ${s.library_limit_mb} MB` : ""}`;
+      if ($("#lvl")) $("#lvl").textContent = `Input level ${s.level} dB. A record starts at ${s.start_level} dB.`;
       $("#size").classList.toggle("notice", !!s.library_full);
     }
     if (changed || !$("#now").firstChild) { renderNow(); renderSpin(); }

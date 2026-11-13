@@ -122,8 +122,9 @@ class TrackMixin:
         """Lengths in seconds by track number ('A1', 'b10'). Returns the numbers not on the album."""
         unknown = []
         for key, secs in lengths.items():
-            m = re.match(r"^\s*([A-Za-z]+)\s*(\d+)\s*$", key)
-            cur = self.db.execute("UPDATE tracks SET length=? WHERE album_id=? AND side=? AND pos=?",
+            # "A1", or "side|position" for releases whose sides are numbers
+            m = re.match(r"^\s*([^|]+?)\s*\|\s*(\d+)\s*$", key) or re.match(r"^\s*([A-Za-z]+)\s*(\d+)\s*$", key)
+            cur = self.db.execute("UPDATE tracks SET length=? WHERE album_id=? AND UPPER(side)=? AND pos=?",
                                   (secs, album_id, m.group(1).upper(), int(m.group(2)))) if m else None
             if cur is None or cur.rowcount == 0:
                 unknown.append(key)
@@ -252,6 +253,13 @@ class Library(TrackMixin):
     def size(self) -> int:
         return self.db.execute("SELECT COUNT(*) FROM songs").fetchone()[0]
 
+    @locked
+    def compact(self) -> None:
+        """Give freed space back to the disk (after songs were forgotten)."""
+        self.db.commit()
+        self.db.execute("VACUUM")
+        self._size = (0.0, 0)
+
     def size_bytes(self) -> int:
         """Everything the library keeps on disk. Measured at most once a minute."""
         at, size = self._size
@@ -325,7 +333,8 @@ class Library(TrackMixin):
     @locked
     def learn(self, song_id: int, hs: list[tuple[int, int]], t0: int) -> None:
         room = MAX_HASHES_PER_SONG - self.hash_count(song_id)
-        if room <= 0 or not hs or self.full:
+        gone = self.db.execute("SELECT 1 FROM songs WHERE id=?", (song_id,)).fetchone() is None
+        if room <= 0 or not hs or self.full or gone:      # gone: forgotten while this was being worked out
             return
         cur = self.db.executemany("INSERT OR IGNORE INTO hashes VALUES (?,?,?)",
                                   [(h, song_id, t + t0) for h, t in hs[:room]])
@@ -393,16 +402,18 @@ class Library(TrackMixin):
             "(SELECT album_id FROM songs WHERE album_id IS NOT NULL) "
             "AND id NOT IN (SELECT album_id FROM tracks)").fetchall()
         for a in gone:
-            covers = [(self.art_dir / f"{a['id']}.jpg", None)]
-            covers += [(p, int(p.stem.split("-disc")[1])) for p in self.art_dir.glob(f"{a['id']}-disc*.jpg")]
-            for path, disc in covers:
-                if path.exists():
-                    name = f"{uuid.uuid4().hex}.jpg"
-                    path.replace(self.leftover_dir / name)
-                    self.db.execute(
-                        "INSERT INTO leftovers (file, artist, album, disc, removed_at) VALUES (?,?,?,?,?)",
-                        (name, a["artist"], a["album"], disc, time.time()))
+            self._set_aside(self.art_dir / f"{a['id']}.jpg", a["artist"], a["album"], None)
+            for p in self.art_dir.glob(f"{a['id']}-disc*.jpg"):
+                self._set_aside(p, a["artist"], a["album"], int(p.stem.split("-disc")[1]))
             self.db.execute("DELETE FROM albums WHERE id=?", (a["id"],))
+
+    def _set_aside(self, path: Path, artist: str, album: str, disc: int | None) -> None:
+        """Move a cover file to the leftovers instead of losing it."""
+        if path.exists():
+            name = f"{uuid.uuid4().hex}.jpg"
+            path.replace(self.leftover_dir / name)
+            self.db.execute("INSERT INTO leftovers (file, artist, album, disc, removed_at) VALUES (?,?,?,?,?)",
+                            (name, artist, album, disc, time.time()))
 
     # --- covers of removed albums --------------------------------------------
     def _drop_leftover(self, row) -> None:
@@ -447,13 +458,18 @@ class Library(TrackMixin):
         otherwise as the album cover."""
         row = self.db.execute("SELECT id, file, disc FROM leftovers WHERE id=?", (leftover_id,)).fetchone()
         data = self.leftover_bytes(leftover_id)
-        if not row or data is None or self.album(album_id) is None:
+        target = self.album(album_id)
+        if not row or data is None or target is None:
             return False
+        self._drop_leftover(row)
+        # the cover it replaces is set aside in turn, so nothing is lost by a wrong pick
         if row["disc"] and any(t["disc"] == row["disc"] for t in self.album_tracks(album_id)):
+            self._set_aside(self.art_dir / self._disc_art_name(album_id, row["disc"]),
+                            target["artist"], target["album"], row["disc"])
             self.set_disc_art(album_id, row["disc"], data)
         else:
+            self._set_aside(self.art_dir / f"{album_id}.jpg", target["artist"], target["album"], None)
             self.set_art(album_id, data, locked=True)
-        self._drop_leftover(row)
         self.db.commit()
         return True
 
@@ -468,7 +484,8 @@ class Library(TrackMixin):
             "LEFT JOIN songs s ON s.album_id = a.id "
             "WHERE a.artist LIKE ? OR a.album LIKE ? GROUP BY a.id ORDER BY last_played DESC NULLS LAST",
             (like, like)).fetchall()
-        return [dict(r) for r in rows]
+        # art_v changes with the cover, so a page never shows a removed album's cover for a new one
+        return [dict(r) | {"art_v": self.art_version(f"{r['id']}.jpg") if r["has_art"] else 0} for r in rows]
 
     @locked
     def album(self, album_id: int) -> dict | None:

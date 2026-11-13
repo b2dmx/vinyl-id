@@ -161,3 +161,35 @@ def test_a_full_library_stops_learning(tmp_path):
     lib.max_bytes = 0
     lib.learn(sid, [(1, 0), (2, 1)], 0)
     assert lib.hash_count(sid) == 2
+
+
+def test_putting_a_leftover_on_an_album_sets_its_old_cover_aside(tmp_path):
+    lib = Library(tmp_path)
+    gone = lib.add_album("Band", "Gone LP")
+    song = lib.add_song(gone, "Song", "Band")
+    lib.set_art(gone, b"\xff\xd8\xffold", locked=True)
+    lib.forget(song)
+    kept = lib.add_album("Band", "Kept LP")
+    lib.add_song(kept, "Other", "Band")
+    lib.set_art(kept, b"\xff\xd8\xffkept", locked=True)
+    [left] = lib.leftovers()
+    assert lib.restore_leftover(left["id"], kept) and lib.art_bytes(kept) == b"\xff\xd8\xffold"
+    [aside] = lib.leftovers()
+    assert aside["album"] == "Kept LP" and lib.leftover_bytes(aside["id"]) == b"\xff\xd8\xffkept"
+
+
+def test_lengths_for_sides_that_are_numbers(tmp_path):
+    lib = Library(tmp_path)
+    tracks = [{"n": 1, "side": "1", "pos": 1, "title": "One"}, {"n": 2, "side": "1", "pos": 2, "title": "Two"}]
+    album = lib.add_album_from_release("Band", "CD", "mb", tracks)
+    assert lib.set_track_lengths(album, {"1|1": 100, "1|2": 200, "2|1": 5}) == ["2|1"]
+    assert [t["length"] for t in lib.album_tracks(album)] == [100, 200]
+
+
+def test_nothing_is_learned_for_a_forgotten_song_and_space_comes_back(tmp_path):
+    lib = Library(tmp_path)
+    sid, _ = lib.upsert("T", "A", "Al", "id1")
+    lib.forget(sid)
+    lib.learn(sid, [(1, 0), (2, 1)], 0)                # a learn job that finished after the forget
+    assert lib.db.execute("SELECT COUNT(*) FROM hashes").fetchone()[0] == 0
+    lib.compact()                                      # must not fail, with or without anything to free

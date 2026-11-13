@@ -52,11 +52,12 @@ In Music Assistant, open your line-in player (the CAST), choose its line-in as t
    - **Address of the Vinyl ID app:** leave as it is.
    - **Speaker that plays your record:** the speaker or amp you listen on. The Record Player's volume and power buttons control it.
    - **The app's silent speaker:** Vinyl ID Listener.
-   - **Player whose line-in the record is on** and **its line-in source:** your CAST and the source you chose in step 2.
+   - **Player whose line-in the record is on** and **its line-in source:** your CAST and the source you chose in step 2. These two and the silent speaker work together: with all three filled in, Vinyl ID keeps the record connected.
+   - **That player's direct / in-sync switch:** leave empty unless your player has such a setting.
 
 **4. Check it hears the record**
 
-Open **Vinyl ID** in the sidebar and drop the needle. With nothing playing, the page shows how loud the input is and how loud it must be for a record to start. If the first number never rises while a record plays, the record is not reaching the listener: repeat step 2.
+Open the Vinyl ID page: on the app's page in Home Assistant press **Open Web UI**, and switch on **Show in sidebar** to keep it one click away. Drop the needle. At the bottom, the page shows how loud the input is and how loud it must be for a record to start. If the first number never rises while a record plays, the record is not reaching the listener: repeat step 2.
 
 The song should appear within about 10 to 15 seconds on the page and on the **Record Player**. If Shazam doesn't know it, press **Name it** on the page and Vinyl ID learns it.
 
@@ -81,7 +82,7 @@ To hear the record in more rooms, group those speakers onto the line-in player i
 
 ## Your library
 
-Open **Vinyl ID** in the sidebar.
+Open the Vinyl ID page.
 
 - **Add an album** from MusicBrainz to get its tracks, sides and cover. Pick the entry that matches your record (LP, year, label).
 - **Now spinning:** choose an album and where the needle is, if Vinyl ID hasn't worked it out by itself.
@@ -93,13 +94,13 @@ Open **Vinyl ID** in the sidebar.
 
 ## Tips
 
-- **Signal threshold:** the level of your turntable when it is on but not playing. The page shows the input level; use that number. A record starts once the sound is 12 dB above it, and a gap between songs is sound that falls back to it.
+- **Signal threshold** (on the app's Configuration tab): the level of your turntable when it is on but not playing. The bottom of the page shows the input level; use the number you see with the turntable on and the needle up. A record starts once the sound is 12 dB above it, and a gap between songs is sound that falls back to it.
 - **Learn my records** is on by default. Turn it off to always use Shazam.
 - The library can only be changed from the Vinyl ID page in Home Assistant. To let a script or another computer change it too, list its address under **Also allow edits from**.
 - Covers you set are never replaced automatically.
 - `http://<home assistant>:8780/stream.mp3` is the record as a stream that names its songs, for a player that should show the title itself. It runs a few seconds behind the record.
 - Space: a cover is about 50-150 KB and a learned song about 0.2 MB, so 1,000 songs is roughly 250 MB. The page shows the current size. **Library size limit** stops learning at a size you choose; songs already learned keep working.
-- The app moved to another machine or port? Settings > Devices & services > Vinyl ID > Reconfigure.
+- The app moved to another machine or port? Settings > Devices & services, open the **Vinyl ID** integration (not the Vinyl ID device under MQTT), then the three-dot menu > Reconfigure.
 
 ## License
 
@@ -109,6 +110,6 @@ The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.8.1 by Goobis<br>
+  Vinyl ID v0.8.2 by Goobis<br>
   AI was used to help develop this application
 </p>
