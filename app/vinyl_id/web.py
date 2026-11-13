@@ -48,6 +48,12 @@ def cover_cache(req: web.Request) -> dict[str, str]:
 def build(app: App) -> web.Application:
     lib, routes = app.lib, web.RouteTableDef()
 
+    def album_of(req) -> int:
+        album_id = int(req.match_info["id"])
+        if not lib.album(album_id):
+            raise web.HTTPNotFound(text="That album is gone")
+        return album_id
+
     @routes.get("/api/status")
     async def status(req):
         """?tracks=0 leaves the album's track list out (for things that ask every few seconds)."""
@@ -76,7 +82,7 @@ def build(app: App) -> web.Application:
     @routes.post("/api/albums/{id:\\d+}/songs")
     async def add_song(req):
         b = await req.json()
-        album_id = int(req.match_info["id"])
+        album_id = album_of(req)
         artist = b.get("artist", "").strip() or (lib.album(album_id) or {}).get("artist", "")
         return web.json_response({"id": lib.add_song(album_id, b["title"].strip(), artist)})
 
@@ -130,7 +136,7 @@ def build(app: App) -> web.Application:
     @routes.post("/api/albums/{id:\\d+}/art")
     async def set_art(req):
         # in a thread: converting a PNG or WebP can take seconds, and the audio loop must keep running
-        await asyncio.to_thread(lib.set_art, int(req.match_info["id"]), await image_from(req), True)
+        await asyncio.to_thread(lib.set_art, album_of(req), await image_from(req), True)
         app.refresh_now()
         return web.json_response({"ok": True})
 
@@ -208,6 +214,8 @@ def build(app: App) -> web.Application:
             raise web.HTTPBadGateway(text="MusicBrainz has no track list for that release")
         if b.get("album_id"):               # give an album you already have its track list
             album_id = int(b["album_id"])
+            if not lib.album(album_id):
+                raise web.HTTPNotFound(text="That album is gone")
             lib.add_tracks(album_id, mbid, rel["tracks"])
             app.tracks_changed(album_id)
         else:
@@ -288,7 +296,10 @@ def build(app: App) -> web.Application:
     wa = web.Application(client_max_size=10 * 1024 * 1024, middlewares=[edits_guard, bad_request, fresh_page])
     wa.add_routes(routes)
     if UI_DIR.exists():
-        wa.router.add_get("/", lambda _: web.FileResponse(UI_DIR / "index.html"))
+        async def page(_):
+            return web.FileResponse(UI_DIR / "index.html")
+
+        wa.router.add_get("/", page)
         wa.router.add_static("/ui/", UI_DIR)
     return wa
 

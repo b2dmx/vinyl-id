@@ -39,16 +39,16 @@ def _options(user_input: dict[str, Any]) -> dict[str, Any]:
             (CONF_SPEAKER, CONF_LISTENER, CONF_SOURCE_PLAYER, CONF_SOURCE_NAME, CONF_MONITOR) if user_input.get(k)}
 
 
-def _guess_listener(hass: HomeAssistant) -> dict[str, str]:
-    """What can be recognised by itself: the app's silent speaker, the player whose line-in
-    feeds it, and that player's direct/in-sync switch."""
+def _guess_listener(hass: HomeAssistant, listener: str = "") -> dict[str, str]:
+    """What can be recognised by itself: the app's silent speaker (by the name the app gives, else by "Vinyl ID..."),
+    the player whose line-in feeds it, and that player's direct/in-sync switch."""
     found: dict[str, str] = {}
     for e in er.async_get(hass).entities.values():
         if e.domain != "media_player" or e.platform == DOMAIN:
             continue
         state = hass.states.get(e.entity_id)      # entities named after their device have no name of their own
         name = e.name or e.original_name or (state.name if state else "")
-        if name.lower().startswith("vinyl id"):
+        if name.lower() == listener.lower() if listener else name.lower().startswith("vinyl id"):
             found[CONF_LISTENER] = e.entity_id
             break
     for state in hass.states.async_all("media_player"):
@@ -71,12 +71,16 @@ class VinylConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             url = user_input[CONF_URL].strip().rstrip("/")
             try:
-                await fetch_status(self.hass, url)
+                status = await fetch_status(self.hass, url)
             except (aiohttp.ClientError, TimeoutError, ValueError):
                 errors["base"] = "cannot_connect"
             else:
-                return self.async_create_entry(title="Vinyl ID", data={CONF_URL: url},
-                                               options=_options(user_input))
+                options = _options(user_input)
+                name = str(status.get("listener") or "")
+                if CONF_LISTENER not in options and name and not name.lower().startswith("vinyl id"):
+                    # renamed in the app, so the form could not suggest it: the app says what it is called
+                    options |= {k: v for k, v in _guess_listener(self.hass, name).items() if k == CONF_LISTENER}
+                return self.async_create_entry(title="Vinyl ID", data={CONF_URL: url}, options=options)
         schema = vol.Schema({vol.Required(CONF_URL, default=DEFAULT_URL): str, **PLAYERS})
         return self.async_show_form(
             step_id="user", errors=errors,

@@ -64,6 +64,7 @@ class App:
         self.spin: Spin | None = self._load_spin()   # 'now spinning': the album and track being played
         self.song_start = 0.0                  # block index where the current song began (learning is stored relative to it)
         self.start_exact = False               # True once Shazam or a local match told us the real position
+        self.rejected: int | None = None       # the song you said this is not (until the next song)
 
     # --- scheduling ------------------------------------------------------------
     def _schedule(self, delay: float, quick: bool = False) -> None:
@@ -93,6 +94,7 @@ class App:
 
     def _mark_start(self) -> None:
         self.song_start, self.start_exact = self.block_i, False
+        self.rejected = None
 
     def _reset_learning(self) -> None:
         self.learn_blocks, self.learn_start = [], self.block_i
@@ -215,19 +217,35 @@ class App:
                         self.pub.track({"title": "Unknown", "source": "unknown"})
                     self._schedule(self.s.retry_seconds)
                     return
-                song_id, needs_art = self.lib.upsert(track.title, track.artist, track.album, track.shazam_id)
-                song = self.lib.song(song_id)
-                if needs_art and track.art_url and song and song.album_id:
-                    if data := await self.rec.fetch(track.art_url):
-                        await asyncio.to_thread(self.lib.set_art, song.album_id, data, False)
+                song_id = self.lib.shazam_song(track.shazam_id)
+                if song_id is None:
+                    # A song on a pre-loaded album is that album's track: no second copy of the
+                    # song, and no second album (with its own cover) under Shazam's album name.
+                    tr = (self.lib.title_in_album(self.spin.album_id, track.title) if self.spin
+                          else self.lib.find_track(track.title, track.artist))
+                    if tr:
+                        song_id = self.lib.song_for_track(tr["id"])
+                        self.lib.tag_shazam(song_id, track.shazam_id, track.artist)
+                    elif self.spin and not self._foreign(track):
+                        self._schedule(self.s.retry_seconds)        # not on this album: ask, save nothing
+                        return
+                if song_id is None:
+                    song_id, needs_art = self.lib.upsert(track.title, track.artist, track.album, track.shazam_id)
+                    song = self.lib.song(song_id)
+                    if needs_art and track.art_url and song and song.album_id:
+                        if data := await self.rec.fetch(track.art_url):
+                            await asyncio.to_thread(self.lib.set_art, song.album_id, data, False)
                 source = "shazam"
                 pos = track.offset
 
             if epoch != self.epoch:       # the record stopped or moved on while this was worked out
                 return
+            if song_id == self.rejected and self.current_source == "manual":
+                self._schedule(self.s.recheck_seconds)        # you already said it isn't this one
+                return
             song_id = self._reconcile(song_id)
             if song_id is None:                               # not on the album being spun: ask, don't learn
-                self._schedule(self.s.recheck_seconds)
+                self._schedule(self.s.retry_seconds)          # soon: twice in a row lets a guessed album go
                 return
 
             if song_id == self.current:
@@ -293,6 +311,24 @@ class App:
             log.info("Attached to pre-loaded album %s", tr["album_id"])
             self._save_spin()
         return song_id
+
+    def _foreign(self, track) -> bool:
+        """Shazam named a song that is neither on the album being followed nor in the library.
+        Nothing is saved for it. True = the album was only a guess and this is the second time
+        the same song was heard: stop following, and take the song."""
+        key = track.shazam_id or f"{track.title}|{track.artist}"
+        seen = self.spin.mismatch
+        if seen and seen.get("key") == key:
+            if not self.spin.auto:
+                return False
+            log.info("Not this album after all; following stopped")
+            self.spin = None
+            self._save_spin()
+            return True
+        self.spin.mismatch = {"id": None, "key": key, "title": track.title, "artist": track.artist,
+                              "album": track.album}
+        self.refresh_now()
+        return False
 
     def _apply_position(self, pos: float | None, clip_start: int) -> bool:
         """Shazam or a local match said where in the song the clip started: fix the song's start."""
@@ -389,7 +425,9 @@ class App:
         if not self.det.playing:
             return None
         if self.current is not None and self.current_source != "manual":
-            # replacing a wrong match: drop the audio that was learned under it this play
+            # replacing a wrong match: drop the audio that was learned under it this play,
+            # and don't let the next check bring the wrong song back
+            self.rejected = self.current
             self._reset_learning()
         album_id = self.lib.add_album(artist, album) if album else None
         song_id = self.lib.add_song(album_id, title, artist)
@@ -448,6 +486,7 @@ class App:
             del spin["tracks"]
         return {"playing": self.det.playing, "unknown": self.unknown, "now": self.now_info(),
                 "library": self.lib.size(), "learn": self.s.learn, "spin": spin,
+                "listener": self.s.receiver_name,
                 # for set-up: how loud the input is now, and how loud it must be for a record to start
                 "level": round(self.level), "start_level": round(self.det.start_level),
                 "library_mb": round(self.lib.size_bytes() / 1048576, 1),

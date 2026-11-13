@@ -144,3 +144,17 @@ def test_failed_identification_retries_later(tmp_path, monkeypatch):
     monkeypatch.setattr(main_mod.Recognizer, "identify", broken)
     asyncio.run(app._identify(fake_song(3, 12), 0))
     assert app.next_check == 30 and not app.busy
+
+
+def test_a_correction_by_hand_is_not_undone_by_the_next_check(tmp_path, monkeypatch):
+    async def wrong(self, pcm):
+        return Track("Wrong Song", "Artist", "LP", "", "shzW")
+
+    def label(app, n):
+        if n == int(30 / BLOCK_SECONDS):
+            app.label_now("Right Song", "Local Band", "")
+
+    app = _run(tmp_path, monkeypatch, wrong, on_block=label)
+    shown = app.pub.tracks
+    said = shown.index(("Right Song", "manual"))
+    assert all(t[0] == "Right Song" for t in shown[said:shown.index(None, said)])   # until the record stops

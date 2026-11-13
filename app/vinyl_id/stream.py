@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from aiohttp import web
 
+from . import audio
 from .audio import ffmpeg_input
 from .config import APP_NAME
 
@@ -62,14 +63,15 @@ async def _serve(req: web.Request, app: App) -> web.StreamResponse:
     sent, now, n = None, None, 0
     try:
         while True:
-            await resp.write(await proc.stdout.readexactly(META_EVERY))
+            # a source that hangs ends the stream; the player then opens it again
+            await resp.write(await asyncio.wait_for(proc.stdout.readexactly(META_EVERY), audio.STALL_SECONDS))
             if with_meta:
                 if n % 5 == 0:                      # about every 2 s is plenty
                     now = app.stream_title()
                 n += 1
                 await resp.write(b"\0" if now == sent else icy_block(*now))   # 0 = nothing new
                 sent = now
-    except (asyncio.IncompleteReadError, ConnectionError):
+    except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionError):
         pass
     finally:
         if proc.returncode is None:

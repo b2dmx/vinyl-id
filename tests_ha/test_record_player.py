@@ -118,3 +118,19 @@ async def test_the_address_can_be_changed_later(hass, aioclient_mock):
     await hass.async_block_till_done()
     assert r["type"] is FlowResultType.ABORT and r["reason"] == "reconfigure_successful"
     assert entry.data[CONF_URL] == new
+
+
+async def test_a_renamed_listener_is_found_by_the_name_the_app_gives(hass, aioclient_mock):
+    from homeassistant.helpers import entity_registry as er
+
+    reg = er.async_get(hass)
+    reg.async_get_or_create("media_player", "music_assistant", "amp", suggested_object_id="turntable_ear_amp",
+                            original_name="Turntable Ear Amp")          # a longer name is someone else
+    ear = reg.async_get_or_create("media_player", "music_assistant", "ear", suggested_object_id="turntable_ear",
+                                  original_name="Turntable Ear").entity_id
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status() | {"listener": "Turntable Ear"})
+    r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    r = await hass.config_entries.flow.async_configure(r["flow_id"], {CONF_URL: URL})
+    await hass.async_block_till_done()
+    assert r["options"] == {"listener": ear}
+    assert reg.async_get(ear).hidden_by is er.RegistryEntryHider.INTEGRATION

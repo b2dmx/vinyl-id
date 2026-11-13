@@ -93,10 +93,10 @@ def test_track_lengths_can_be_set_by_track_number(tmp_path):
 
 def test_disc_cover_and_loose_titles(tmp_path):
     lib = Library(tmp_path)
-    tracks = [{"n": 1, "disc": 1, "side": "A", "pos": 1, "title": "The Stables"},
+    tracks = [{"n": 1, "disc": 1, "side": "A", "pos": 1, "title": "The Harbour"},
               {"n": 2, "disc": 2, "side": "C", "pos": 1, "title": "Ruins"}]
     album = lib.add_album_from_release("Composer One & Composer Two", "Box", "mb", tracks)
-    assert lib.find_track("Stables", "Composer Two")["side"] == "A"      # no "The", one of the artists
+    assert lib.find_track("Harbour", "Composer Two")["side"] == "A"      # no "The", one of the artists
     assert lib.disc_art_file(album, 2) is None and lib.discs_with_art(album) == []
     lib.set_disc_art(album, 2, b"\xff\xd8\xffdisc2")
     assert lib.discs_with_art(album) == [2]
@@ -113,14 +113,14 @@ def test_lp_covers_can_be_switched_off(tmp_path):
 
 def test_shazam_title_inside_the_sleeve_title_matches(tmp_path):
     lib = Library(tmp_path)
-    tracks = [{"n": 1, "side": "A", "pos": 1, "title": "Staff Credits"},
+    tracks = [{"n": 1, "side": "A", "pos": 1, "title": "Closing Credits"},
               {"n": 2, "side": "A", "pos": 2, "title": "Battle (Day)"},
               {"n": 3, "side": "A", "pos": 3, "title": "Battle (Night)"},
-              {"n": 4, "side": "B", "pos": 1, "title": "Sand-Seal Race"},
-              {"n": 5, "side": "B", "pos": 2, "title": "Sand-Seal Race: Win"}]
+              {"n": 4, "side": "B", "pos": 1, "title": "Boat Race"},
+              {"n": 5, "side": "B", "pos": 2, "title": "Boat Race: Win"}]
     lib.add_album_from_release("Composer", "Box", "mb", tracks)
-    assert lib.find_track("Credits", "Composer")["title"] == "Staff Credits"
-    assert lib.find_track("Sand-Seal Race", "Composer")["pos"] == 1          # exact beats contained
+    assert lib.find_track("Credits", "Composer")["title"] == "Closing Credits"
+    assert lib.find_track("Boat Race", "Composer")["pos"] == 1          # exact beats contained
     assert lib.find_track("Race", "Composer") is None                        # too short to mean anything
     assert lib.find_track("Seal Race", "Composer") is None                   # fits two tracks: no guess
 
@@ -193,3 +193,32 @@ def test_nothing_is_learned_for_a_forgotten_song_and_space_comes_back(tmp_path):
     lib.learn(sid, [(1, 0), (2, 1)], 0)                # a learn job that finished after the forget
     assert lib.db.execute("SELECT COUNT(*) FROM hashes").fetchone()[0] == 0
     lib.compact()                                      # must not fail, with or without anything to free
+
+
+def test_an_album_you_just_added_is_not_swept_away(tmp_path):
+    lib = Library(tmp_path)
+    empty = lib.add_album("Band", "Just Added")
+    lib.set_art(empty, b"\xff\xd8\xffmine", locked=True)
+    sid, _ = lib.upsert("T", "A", "Al", "id1")
+    lib.forget(sid)                                         # its own album goes, the empty one stays
+    assert [a["album"] for a in lib.albums()] == ["Just Added"] and lib.leftovers() == []
+
+
+def test_two_tracks_with_the_same_name_apart_from_brackets(tmp_path):
+    lib = Library(tmp_path)
+    tracks = [{"n": 1, "side": "A", "pos": 1, "title": "Battle (Day)"},
+              {"n": 2, "side": "A", "pos": 2, "title": "Battle (Night)"}]
+    album = lib.add_album_from_release("Band", "LP", "mb", tracks)
+    assert lib.title_in_album(album, "battle (night)")["pos"] == 2
+    assert lib.title_in_album(album, "Battle (Day)")["pos"] == 1
+    assert lib.find_track("Battle (Night)", "Band")["pos"] == 2
+
+
+def test_shazam_id_is_not_tied_to_a_track_by_someone_else(tmp_path):
+    lib = Library(tmp_path)
+    album = lib.add_album_from_release("The Band", "LP", "mb", [{"n": 1, "side": "A", "pos": 1, "title": "Home"}])
+    own = lib.song_for_track(lib.album_tracks(album)[0]["id"])
+    lib.tag_shazam(own, "other-home", "Someone Else")
+    assert lib.shazam_song("other-home") is None
+    lib.tag_shazam(own, "their-home", "Band")
+    assert lib.shazam_song("their-home") == own

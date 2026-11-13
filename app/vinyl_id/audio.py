@@ -17,6 +17,7 @@ from .config import BLOCK_SECONDS, SAMPLE_RATE
 
 log = logging.getLogger(__name__)
 BLOCK_BYTES = int(SAMPLE_RATE * BLOCK_SECONDS) * 2
+STALL_SECONDS = 20   # nothing at all for this long: the source hangs (a quiet input still sends silence)
 
 
 async def _log_stderr(stream: asyncio.StreamReader) -> None:
@@ -51,11 +52,14 @@ async def ffmpeg_blocks(source: str, input_format: str = "") -> AsyncIterator[np
         errors = asyncio.create_task(_log_stderr(proc.stderr))
         try:
             while True:
-                data = await proc.stdout.readexactly(BLOCK_BYTES)
+                data = await asyncio.wait_for(proc.stdout.readexactly(BLOCK_BYTES), STALL_SECONDS)
                 yield np.frombuffer(data, dtype=np.int16)
         except asyncio.IncompleteReadError:
             log.warning("Audio input ended; retrying in 5 s")
             yield None      # nothing is playing while there is no input
+        except asyncio.TimeoutError:
+            log.warning("No audio arrived for %d s; opening the input again", STALL_SECONDS)
+            yield None
         finally:
             if proc.returncode is None:
                 proc.kill()

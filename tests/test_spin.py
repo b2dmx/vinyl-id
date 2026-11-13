@@ -214,3 +214,53 @@ def test_unknown_song_after_a_known_one_is_not_learned_into_it(tmp_path, monkeyp
     app = _run(tmp_path, monkeypatch, side, first_only)
     sid = app.lib.db.execute("SELECT id FROM songs WHERE title='Song One'").fetchone()[0]
     assert app.lib.hash_count(sid) <= len(hashes(fake_song(11, 60))) * 1.2     # song two is not in there
+
+
+def _one_song_side(tmp_path, monkeypatch, before):
+    side = np.concatenate([fake_song(11, 60), np.zeros(SAMPLE_RATE * 50, np.int16)])
+
+    async def shazam(self, pcm):
+        return Track("Song One", "The Band", "Test LP (Deluxe)", "", "shz1", offset=2.0)
+
+    app = _run(tmp_path, monkeypatch, side, shazam, before=before)
+    assert [a["album"] for a in app.lib.albums()] == ["Test LP"]              # no album under Shazam's name
+    assert app.lib.db.execute("SELECT COUNT(*) FROM songs").fetchone()[0] == 1
+    assert app.lib.shazam_song("shz1") == app.lib.album_tracks(app.spin.album_id)[0]["song_id"]
+    assert app.lib.leftovers() == []
+
+
+def test_shazam_song_on_the_followed_album_is_not_saved_twice(tmp_path, monkeypatch):
+    _one_song_side(tmp_path, monkeypatch, lambda app: app.start_spin(
+        app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks()), "A", 1))
+
+
+def test_shazam_song_on_a_preloaded_album_is_not_saved_twice(tmp_path, monkeypatch):
+    _one_song_side(tmp_path, monkeypatch,
+                   lambda app: app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks()))
+
+
+def test_a_song_heard_while_following_another_album_is_not_saved(tmp_path, monkeypatch):
+    side = np.concatenate([fake_song(11, 40), np.zeros(SAMPLE_RATE * 50, np.int16)])
+
+    async def other(self, pcm):
+        return Track("Something Else", "Other Act", "Other LP", "", "shz9")
+
+    app = _run(tmp_path, monkeypatch, side, other, before=lambda app: app.start_spin(
+        app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks())))
+    assert [a["album"] for a in app.lib.albums()] == ["Test LP"]
+    assert app.lib.shazam_song("shz9") is None
+
+
+def test_a_second_copy_of_a_track_is_folded_into_it(tmp_path):
+    lib = Library(tmp_path)
+    album = lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks())
+    tr = lib.album_tracks(album)[0]
+    own = lib.song_for_track(tr["id"])
+    dup, _ = lib.upsert("Song One", "The Band", "Other Pressing", "shz1")
+    lib.set_art(lib.song(dup).album_id, b"\xff\xd8\xfffetched", locked=False)
+    lib.learn(dup, [(1, 0), (2, 1)], 0)
+    lib.played(dup)
+    assert lib.attach_song(dup, tr) == own
+    assert lib.song(dup) is None and lib.hash_count(own) == 2 and lib.shazam_song("shz1") == own
+    assert [a["album"] for a in lib.albums()] == ["Test LP"] and lib.leftovers() == []
+    assert not list(lib.art_dir.iterdir())

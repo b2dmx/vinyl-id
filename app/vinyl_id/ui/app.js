@@ -60,7 +60,7 @@ function renderNow() {
     el.innerHTML = `<div class="now"><div class="art">${icon(I.album)}</div><div class="info">
       <h2 class="title">${s.playing ? "Listening..." : "Nothing playing"}</h2>
       <p class="sub">${s.playing ? (s.unknown ? "Shazam doesn't know this one." : "Working out what's playing.") : "Drop the needle and it shows up here."}</p>
-      ${!s.playing && s.level <= -88 ? `<p class="muted">No sound is reaching Vinyl ID. Check that the record is sent to its silent speaker (Vinyl ID Listener) in Music Assistant.</p>` : ""}
+      ${!s.playing && s.level <= -88 ? `<p class="muted">No sound is reaching Vinyl ID. Check that the record is sent to its silent speaker (${esc(s.listener || "Vinyl ID Listener")}) in Music Assistant.</p>` : ""}
       ${s.unknown ? `<div class="row"><button class="btn tonal" id="nameit">Name it</button></div>` : ""}</div></div>`;
     if (s.unknown) $("#nameit").onclick = () => nameDialog(null);
     return;

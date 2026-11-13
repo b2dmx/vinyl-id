@@ -39,7 +39,7 @@ Vinyl ID listens to your record player and shows the song, artist, album and cov
 **1. The app**
 
 1. Add the repository with the button above, install **Vinyl ID** and start it. The default **Audio source**, Sendspin, is the tested one.
-2. In Music Assistant a new speaker appears: **Vinyl ID Listener**. It is silent. It is how the record reaches the app.
+2. In Music Assistant a new speaker appears: **Vinyl ID Listener** (or the name you gave it on the app's Configuration tab). It is silent. It is how the record reaches the app.
 
 **2. Send the record to the listener**
 
@@ -110,6 +110,6 @@ The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.8.2 by Goobis<br>
+  Vinyl ID v0.8.3 by Goobis<br>
   AI was used to help develop this application
 </p>

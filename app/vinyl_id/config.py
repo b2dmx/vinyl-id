@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 
 APP_NAME = "Vinyl ID"
-VERSION = "0.8.2"
+VERSION = "0.8.3"
 SIGNATURE = f"{APP_NAME} v{VERSION} by Goobis"
 AI_NOTE = "AI was used to help develop this application"
 
@@ -57,6 +57,8 @@ class Settings:
     max_library_mb: float = _f("MAX_LIBRARY_MB", 0)      # stop learning at this size on disk; 0 = no limit
     web_port: int = int(_f("WEB_PORT", 8780))            # not 8095: that is Music Assistant's
     public_url: str = _s("PUBLIC_URL", "http://localhost:8780")  # how HA reaches this service
+
+    receiver_name: str = _s("RECEIVER_NAME", "Vinyl ID Listener")  # the silent speaker's name in Music Assistant
 
     edit_from: str = _s("EDIT_FROM")  # comma-separated IPs allowed to edit; blank = anyone on the LAN
 

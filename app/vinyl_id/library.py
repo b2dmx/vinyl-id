@@ -79,23 +79,32 @@ def _norm(s: str) -> str:
     """Compare titles loosely: no case, no '(Remastered)'-style suffix, no punctuation."""
     s = re.sub(r"[\(\[].*?[\)\]]", "", s.lower())
     s = re.sub(r"\s-\s.*(remaster|mix|version|edit|mono|stereo).*$", "", s)
-    s = re.sub(r"^\s*(the|a|an)\s+", "", s)          # Shazam says "Stables", the sleeve "The Stables"
+    s = re.sub(r"^\s*(the|a|an)\s+", "", s)          # Shazam says "Harbour", the sleeve "The Harbour"
     return re.sub(r"[\W_]+", "", s)          # letters and digits of any script
 
 
 def _same_title(a: str, b: str) -> bool:
-    """Titles already through _norm. Shazam says "Credits" where the sleeve says "Staff Credits":
+    """Titles already through _norm. Shazam says "Credits" where the sleeve says "Closing Credits":
     one inside the other counts, unless it is too short to mean anything."""
     return a == b or (min(len(a), len(b)) >= 5 and (a in b or b in a))
 
 
-def _pick(tracks: list, want: str):
+def _same_artist(a: str, b: str) -> bool:
+    """Loosely: one name inside the other, or one of them unknown."""
+    a, b = _norm(a), _norm(b)
+    return not a or not b or a in b or b in a
+
+
+def _pick(tracks: list, title: str):
     """The track with this title: an exact one, else the only one that contains it (or is contained)."""
+    want = _norm(title)
     if not want:                              # nothing left to compare (a title of symbols only)
         return None
     exact = [t for t in tracks if _norm(t["title"]) == want]
     if exact:
-        return exact[0]
+        # "Battle (Day)" and "Battle (Night)" compare equal: the one spelled as asked comes first
+        same = [t for t in exact if t["title"].strip().lower() == title.strip().lower()]
+        return (same or exact)[0]
     close = [t for t in tracks if _same_title(_norm(t["title"]), want)]
     return close[0] if len(close) == 1 else None
 
@@ -164,7 +173,7 @@ class TrackMixin:
                 return t
         s = self.song(song_id)
         if s:
-            return _pick(tracks, _norm(s.title))
+            return _pick(tracks, s.title)
         return None
 
     @locked
@@ -174,24 +183,45 @@ class TrackMixin:
             "SELECT t.id, t.album_id, t.title, a.artist, MAX(s.last_played) lp FROM tracks t "
             "JOIN albums a ON a.id = t.album_id LEFT JOIN songs s ON s.album_id = a.id "
             "GROUP BY t.id ORDER BY lp DESC NULLS LAST").fetchall()
-        want, who = _norm(title), _norm(artist)
-        by = [r for r in rows if not who or not (have := _norm(r["artist"])) or who in have or have in who]
-        r = _pick(by, want)
+        r = _pick([r for r in rows if _same_artist(r["artist"], artist)], title)
         return dict(self.db.execute(
             "SELECT id, album_id, n, disc, side, pos, title, length, song_id FROM tracks WHERE id=?",
             (r["id"],)).fetchone()) if r else None
 
     @locked
+    def title_in_album(self, album_id: int, title: str) -> dict | None:
+        """The track of this album with this title."""
+        return _pick(self.album_tracks(album_id), title)
+
+    @locked
     def attach_song(self, song_id: int, track: dict) -> int:
-        """Make a song this track. Returns the song id to use (the track's own, if it had one)."""
+        """Make a song this track. Returns the song id to use (the track's own, if it had one:
+        the other song is then the same song a second time, and is folded into it)."""
         row = self.db.execute("SELECT song_id FROM tracks WHERE id=?", (track["id"],)).fetchone()
         if row and row["song_id"] and row["song_id"] != song_id and self.song(row["song_id"]):
+            self._merge(song_id, row["song_id"])
             return row["song_id"]
+        was = self.db.execute("SELECT album_id FROM songs WHERE id=?", (song_id,)).fetchone()
+        self.db.execute("UPDATE tracks SET song_id=NULL WHERE song_id=?", (song_id,))   # one track per song
         self.db.execute("UPDATE tracks SET song_id=? WHERE id=?", (song_id, track["id"]))
         self.db.execute("UPDATE songs SET album_id=? WHERE id=?", (track["album_id"], song_id))
-        self._gc_albums()
+        self._gc_album(was and was["album_id"], keep_fetched=False)
         self.db.commit()
         return song_id
+
+    def _merge(self, src: int, dst: int) -> None:
+        """Fold song `src` into `dst`: what was learned, its Shazam id and its play count move over."""
+        old = self.db.execute("SELECT shazam_id, plays, album_id FROM songs WHERE id=?", (src,)).fetchone()
+        if not old:
+            return
+        moved = self.db.execute("UPDATE OR IGNORE hashes SET song_id=? WHERE song_id=?", (dst, src)).rowcount
+        self.db.execute("DELETE FROM hashes WHERE song_id=?", (src,))
+        self.db.execute("UPDATE tracks SET song_id=NULL WHERE song_id=?", (src,))
+        self.db.execute("DELETE FROM songs WHERE id=?", (src,))
+        self.db.execute("UPDATE songs SET shazam_id=COALESCE(shazam_id, ?), plays=plays+?, hashes=hashes+? WHERE id=?",
+                        (old["shazam_id"], old["plays"], moved, dst))
+        self._gc_album(old["album_id"], keep_fetched=False)
+        self.db.commit()
 
     @locked
     def add_album_from_release(self, artist: str, album: str, mbid: str, tracks: list[dict]) -> int:
@@ -264,7 +294,12 @@ class Library(TrackMixin):
         """Everything the library keeps on disk. Measured at most once a minute."""
         at, size = self._size
         if time.monotonic() - at > 60 or not at:
-            size = sum(p.stat().st_size for p in self.dir.rglob("*") if p.is_file() and p.name != "spin.json")
+            size = 0
+            for p in self.dir.rglob("*"):
+                try:                              # a file can vanish while this looks (a cover being replaced)
+                    size += p.stat().st_size if p.is_file() and p.name != "spin.json" else 0
+                except OSError:
+                    pass
             self._size = (time.monotonic(), size)
         return size
 
@@ -308,6 +343,22 @@ class Library(TrackMixin):
             return sid, n, max(0, b * 4)
         return None
 
+    @locked
+    def shazam_song(self, shazam_id: str) -> int | None:
+        """The song already saved under this Shazam id."""
+        row = self.db.execute("SELECT id FROM songs WHERE shazam_id=?", (shazam_id,)).fetchone() if shazam_id else None
+        return row[0] if row else None
+
+    @locked
+    def tag_shazam(self, song_id: int, shazam_id: str, artist: str) -> None:
+        """Remember Shazam's id for a song, so the next time it is found without comparing titles.
+        Not when the artists differ: the same title by someone else must stay a title match only."""
+        song = self.song(song_id)
+        if shazam_id and song and _same_artist(song.artist, artist):
+            self.db.execute("UPDATE OR IGNORE songs SET shazam_id=? WHERE id=? AND shazam_id IS NULL",
+                            (shazam_id, song_id))
+            self.db.commit()
+
     # --- writes ------------------------------------------------------------
     @locked
     def upsert(self, title: str, artist: str, album: str, shazam_id: str) -> tuple[int, bool]:
@@ -346,12 +397,13 @@ class Library(TrackMixin):
         self.db.execute("UPDATE songs SET plays = plays + 1, last_played = ? WHERE id = ?", (time.time(), song_id))
         self.db.commit()
 
-    @locked
     def set_art(self, album_id: int, data: bytes, locked: bool) -> None:
+        data = as_jpeg(data)            # before taking the lock: converting can take seconds
         name = f"{album_id}.jpg"
-        (self.art_dir / name).write_bytes(as_jpeg(data))
-        self.db.execute("UPDATE albums SET art_file=?, art_locked=? WHERE id=?", (name, int(locked), album_id))
-        self.db.commit()
+        with self.lock:
+            (self.art_dir / name).write_bytes(data)
+            self.db.execute("UPDATE albums SET art_file=?, art_locked=? WHERE id=?", (name, int(locked), album_id))
+            self.db.commit()
 
     @locked
     def art_bytes(self, album_id: int) -> bytes | None:
@@ -388,21 +440,28 @@ class Library(TrackMixin):
 
     @locked
     def forget(self, song_id: int) -> None:
+        was = self.db.execute("SELECT album_id FROM songs WHERE id=?", (song_id,)).fetchone()
         self.db.execute("DELETE FROM hashes WHERE song_id=?", (song_id,))
         self.db.execute("DELETE FROM songs WHERE id=?", (song_id,))
         self.db.execute("UPDATE tracks SET song_id=NULL WHERE song_id=?", (song_id,))
-        self._gc_albums()
+        self._gc_album(was and was["album_id"])
         self.db.commit()
 
-    def _gc_albums(self) -> None:
-        """Drop albums with no songs and no track list (pre-loaded albums stay).
-        Their covers are set aside for a while instead of deleted, so a slip can be undone."""
+    def _gc_album(self, album_id: int | None, keep_fetched: bool = True) -> None:
+        """A song just left this album: drop the album if it now has no songs and no track list.
+        (Only this one: an album you added and have not filled yet is left alone.)
+        Its covers are set aside for a while instead of deleted, so a slip can be undone.
+        keep_fetched=False: the album only emptied because its song turned out to be a track of
+        another album, so a cover that was fetched for it (not one you chose) is just removed."""
         gone = self.db.execute(
-            "SELECT id, artist, album FROM albums WHERE id NOT IN "
+            "SELECT id, artist, album, art_locked FROM albums WHERE id=? AND id NOT IN "
             "(SELECT album_id FROM songs WHERE album_id IS NOT NULL) "
-            "AND id NOT IN (SELECT album_id FROM tracks)").fetchall()
+            "AND id NOT IN (SELECT album_id FROM tracks)", (album_id,)).fetchall()
         for a in gone:
-            self._set_aside(self.art_dir / f"{a['id']}.jpg", a["artist"], a["album"], None)
+            if keep_fetched or a["art_locked"]:
+                self._set_aside(self.art_dir / f"{a['id']}.jpg", a["artist"], a["album"], None)
+            else:
+                (self.art_dir / f"{a['id']}.jpg").unlink(missing_ok=True)
             for p in self.art_dir.glob(f"{a['id']}-disc*.jpg"):
                 self._set_aside(p, a["artist"], a["album"], int(p.stem.split("-disc")[1]))
             self.db.execute("DELETE FROM albums WHERE id=?", (a["id"],))
