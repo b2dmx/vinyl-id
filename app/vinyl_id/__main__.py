@@ -149,8 +149,9 @@ class App:
                 self.pub.playing(False)
                 self.pub.track(None)
 
-            if self.spin and self.det.playing and self.spin.tick(self.clock()):
+            if self.spin and self.det.playing and not self.det.in_dip and self.spin.tick(self.clock()):
                 # songs running together: the listed length ran out before a gap was heard
+                # (never in a quiet stretch: that is a gap, or the side has ended)
                 self._commit_learning(trim_tail=True, extra_trim=LENGTH_GRACE)
                 self._clear_recent()
                 self._spin_sync()

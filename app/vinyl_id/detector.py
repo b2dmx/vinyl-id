@@ -29,6 +29,11 @@ class Detector:
         self._dip_lo = self._dip_hi = 0.0   # quietest and loudest block of the current dip
         self._recent: deque[float] = deque(maxlen=int(20 / BLOCK_SECONDS))  # ~20 s of song levels
 
+    @property
+    def in_dip(self) -> bool:
+        """Quiet right now: a gap between songs, a soft passage, or the end of the side."""
+        return self._dip > 0
+
     def feed(self, db: float) -> Event | None:
         s, dt = self.s, BLOCK_SECONDS
         has_signal = db >= s.signal_threshold_db

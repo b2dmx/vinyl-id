@@ -163,11 +163,12 @@ def test_shazam_attaches_album_and_gives_position(tmp_path, monkeypatch):
     side = np.concatenate([fake_song(11, 60), np.zeros(SAMPLE_RATE * 50, np.int16)])
 
     async def shazam(self, pcm):
-        return Track("Song One", "The Band", "Test LP (Deluxe)", "", "shz1", offset=20.0)
+        return Track("Song One", "The Band", "Test LP (Deluxe)", "", "shz1", offset=2.0)
 
     def preload(app):
         app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks())
 
+    # the side ends in silence: the track must not move on by its listed length there
     app = _run(tmp_path, monkeypatch, side, shazam, before=preload)
     assert app.spin is not None and app.spin.auto and app.spin.cur["title"] == "Song One"
     timed = [i for i in app.pub.infos if i.get("track_started_at")]
