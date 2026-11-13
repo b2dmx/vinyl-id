@@ -1,5 +1,5 @@
 name: Vinyl ID
-version: "0.4.5"
+version: "0.4.6"
 slug: vinyl_id
 description: Shows what's playing on your record player, with its cover, in Home Assistant.
 url: https://github.com/b2dmx/vinyl-id

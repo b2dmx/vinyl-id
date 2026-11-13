@@ -164,7 +164,10 @@ class Recognizer:
                 async with self._session().get(
                         f"https://musicbrainz.org/ws/2/{path}", params={**params, "fmt": "json"},
                         headers={"User-Agent": f"VinylID/{VERSION} (https://github.com/b2dmx/vinyl-id)"}) as r:
-                    return await r.json(content_type=None) if r.status == 200 else None
+                    if r.status != 200:   # 503 = too many requests from this address
+                        log.warning("MusicBrainz answered %s for %s", r.status, path)
+                        return None
+                    return await r.json(content_type=None)
             except Exception as exc:
                 log.warning("MusicBrainz lookup failed: %s", exc)
                 return None
