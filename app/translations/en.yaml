@@ -20,3 +20,8 @@ configuration:
   receiver_name:
     name: Speaker name
     description: The name Vinyl ID uses in Music Assistant.
+  edit_from:
+    name: Also allow edits from
+    description: >-
+      Normally the library can only be changed from this page in Home Assistant.
+      To let a script or another computer change it too, list their IP addresses here, separated by commas.

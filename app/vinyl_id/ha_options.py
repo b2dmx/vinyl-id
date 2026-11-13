@@ -39,7 +39,8 @@ env = {
     "DATA_DIR": "/data",
     "WEB_PORT": "8780",
     "PUBLIC_URL": f"http://{lan_ip()}:8780",
-    "EDIT_FROM": "172.30.32.2,127.0.0.1",   # edits only through the HA sidebar (ingress)
+    # edits only through the HA sidebar (ingress), plus any addresses you allow yourself
+    "EDIT_FROM": ",".join(["172.30.32.2", "127.0.0.1", *(opts.get("edit_from") or "").replace(" ", "").split(",")]).strip(","),
 }
 m = mqtt_service()
 if m:
