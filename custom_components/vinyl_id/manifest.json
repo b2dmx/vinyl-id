@@ -1,0 +1,13 @@
+{
+  "domain": "vinyl_id",
+  "name": "Vinyl ID",
+  "codeowners": ["@b2dmx"],
+  "config_flow": true,
+  "documentation": "https://github.com/b2dmx/vinyl-id",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/b2dmx/vinyl-id/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.6.0"
+}

@@ -12,7 +12,10 @@
   <a href="https://ko-fi.com/goobis2dmx"><img src="https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=kofi&logoColor=white" alt="Support on Ko-fi"></a>
 </p>
 
-A Home Assistant app that listens to your record player's line feed and shows the song, artist, album and cover.
+Vinyl ID listens to your record player's line feed and shows the song, artist, album and cover in Home Assistant. It comes in two parts:
+
+- **The app** listens, identifies the songs and keeps your library.
+- **The integration** adds a **Record Player** media player: song, cover and progress, with the volume and power of the speaker you choose.
 
 ## What it does
 
@@ -29,6 +32,7 @@ Needs Home Assistant with the Mosquitto broker.
 
 1. Add the repository, install **Vinyl ID**, and pick an **Audio source**: Sendspin, AirPlay or Stream.
 2. Start it, then open **Vinyl ID** in the sidebar.
+3. For the Record Player, add this repository to HACS as an **Integration**, download **Vinyl ID**, restart Home Assistant, then add **Vinyl ID** under Settings > Devices & services. Pick the speaker that plays your record, or leave it empty to only show what is playing.
 
 **On a NAS or server instead:** fill in `docker-compose.yml` (your MQTT broker and login, `PUBLIC_URL`), then run `docker compose up -d --build`. Home Assistant finds it through MQTT and the same entities appear. Open `http://<your-nas>:8095` for the library page. Anyone on your network can open it and, unless you set `EDIT_FROM` to the addresses allowed to make changes, edit your library.
 
@@ -54,6 +58,6 @@ The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.5.2 by Goobis<br>
+  Vinyl ID v0.6.0 by Goobis<br>
   AI was used to help develop this application
 </p>

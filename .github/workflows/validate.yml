@@ -15,3 +15,14 @@ jobs:
           python-version: "3.13"
       - run: pip install pytest pytest-asyncio numpy aiohttp "paho-mqtt>=2.1,<3" shazamio==0.9.0
       - run: pytest -q
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: home-assistant/actions/hassfest@master
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: pip install pytest-homeassistant-custom-component
+      - run: pytest -q -c tests_ha/pytest.ini tests_ha

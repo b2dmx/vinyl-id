@@ -1,0 +1,37 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Vinyl ID",
+        "description": "Adds a Record Player that shows the song, cover and progress of the record the Vinyl ID app hears.",
+        "data": {
+          "url": "Address of the Vinyl ID app",
+          "speaker": "Speaker that plays your record (optional)"
+        },
+        "data_description": {
+          "url": "Leave as it is when the app runs on this Home Assistant.",
+          "speaker": "The Record Player's volume and power buttons control this speaker. Leave empty to only show what is playing."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No Vinyl ID app answered at that address. Check that the app is running."
+    },
+    "abort": {
+      "single_instance_allowed": "Vinyl ID is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Record Player",
+        "data": {
+          "speaker": "Speaker that plays your record (optional)"
+        },
+        "data_description": {
+          "speaker": "The Record Player's volume and power buttons control this speaker. Leave empty to only show what is playing."
+        }
+      }
+    }
+  }
+}
