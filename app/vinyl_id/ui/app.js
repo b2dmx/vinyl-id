@@ -160,9 +160,11 @@ async function loadAlbums() {
 
 async function albumDialog(id) {
   let tracks = [], a = albums.find((x) => x.id === id);
-  try { tracks = await api(`albums/${id}/tracks`); if (!a) a = (await api("albums")).find((x) => x.id === id); } catch (e) { return fail(e); }
+  let discArt = [];
+  try { tracks = await api(`albums/${id}/tracks`); discArt = await api(`albums/${id}/discs`); if (!a) a = (await api("albums")).find((x) => x.id === id); } catch (e) { return fail(e); }
   let side = "";
   const multi = tracks.some((t) => t.disc > 1);
+  const discs = multi ? [...new Set(tracks.map((t) => t.disc))] : [];
   const rows = tracks.map((t) => {
     const head = t.side !== side ? `<div class="side-label">${multi ? `LP ${t.disc} · ` : ""}Side ${esc(t.side)}</div>` : "";
     side = t.side;
@@ -176,6 +178,9 @@ async function albumDialog(id) {
       <label class="field"><span>Artist</span><input id="f-artist" value="${esc(a && a.artist)}"></label></div></div>
     <div class="row"><button class="btn tonal" id="cover">Change cover</button>
       <button class="btn tonal" id="find">${tracks.length ? "Pick another pressing" : "Find track list"}</button></div>
+    ${discs.length ? `<div><h3>A cover for each LP</h3><p class="muted">Shown while that LP plays. Without one, the album cover is used.</p>
+      <div class="row">${discs.map((d) => `<button class="btn ${discArt.includes(d) ? "tonal" : "text"}" data-disc="${d}">LP ${d}${discArt.includes(d) ? " · set" : ""}</button>`).join("")}</div>
+      <input type="file" id="disc-file" accept="image/*" hidden></div>` : ""}
     ${tracks.length ? `<div><h3>Tracks</h3><div class="list" style="gap:2px">${rows}</div></div>` : `<p class="muted">No track list yet. Find the pressing to follow it side by side.</p>`}`,
     `<button class="btn text" data-close>Close</button>${tracks.length ? `<button class="btn tonal" id="spinit">${icon(I.play, "s")}Spin this album</button>` : ""}<button class="btn filled" id="save">Save</button>`);
   $("#save").onclick = async () => {
@@ -186,6 +191,13 @@ async function albumDialog(id) {
   };
   $("#cover").onclick = () => coverDialog(id, a);
   $("#find").onclick = () => addAlbumDialog(id, a ? `${a.artist} ${a.album}` : "");
+  let disc = 0;
+  dlg.querySelectorAll("[data-disc]").forEach((b) => (b.onclick = () => { disc = Number(b.dataset.disc); $("#disc-file").click(); }));
+  if ($("#disc-file")) $("#disc-file").onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const fd = new FormData(); fd.append("file", f);
+    try { await api(`albums/${id}/discs/${disc}/art`, { method: "POST", body: fd }); toast(`Cover saved for LP ${disc}`); refresh(); albumDialog(id); } catch (er) { fail(er); }
+  };
   const spinTo = (sd, pos) => post("spin", { album_id: id, side: sd, pos }).then(() => { dlg.close(); refresh(); }, fail);
   if ($("#spinit")) $("#spinit").onclick = () => spinTo("", 1);
   dlg.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => { const [sd, p] = b.dataset.go.split("|"); spinTo(sd, Number(p)); }));

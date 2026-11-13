@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 
 APP_NAME = "Vinyl ID"
-VERSION = "0.4.7"
+VERSION = "0.5.0"
 SIGNATURE = f"{APP_NAME} v{VERSION} by Goobis"
 AI_NOTE = "AI was used to help develop this application"
 

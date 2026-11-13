@@ -26,3 +26,10 @@ def test_seconds_reads_both_forms():
         except (ValueError, TypeError):
             continue
         raise AssertionError(bad)
+
+
+def test_icy_block_is_padded_to_16_bytes():
+    from vinyl_id.stream import icy_block
+    b = icy_block("Artist - Song", "http://x/art")
+    assert len(b) == 1 + b[0] * 16
+    assert b[1:].rstrip(b"\0") == b"StreamTitle='Artist - Song';StreamUrl='http://x/art';"

@@ -89,3 +89,15 @@ def test_track_lengths_can_be_set_by_track_number(tmp_path):
     album = lib.add_album_from_release("Band", "LP", "mb", tracks)
     assert lib.set_track_lengths(album, {"A1": 121, "b1": 9, "C4": 30}) == ["C4"]
     assert [t["length"] for t in lib.album_tracks(album)] == [121, None, 9]
+
+
+def test_disc_cover_and_loose_titles(tmp_path):
+    lib = Library(tmp_path)
+    tracks = [{"n": 1, "disc": 1, "side": "A", "pos": 1, "title": "The Stables"},
+              {"n": 2, "disc": 2, "side": "C", "pos": 1, "title": "Ruins"}]
+    album = lib.add_album_from_release("Composer One & Composer Two", "Box", "mb", tracks)
+    assert lib.find_track("Stables", "Composer Two")["side"] == "A"      # no "The", one of the artists
+    assert lib.disc_art_file(album, 2) is None and lib.discs_with_art(album) == []
+    lib.set_disc_art(album, 2, b"\xff\xd8\xffdisc2")
+    assert lib.discs_with_art(album) == [2]
+    assert lib.art_file_bytes(lib.disc_art_file(album, 2)) == b"\xff\xd8\xffdisc2"

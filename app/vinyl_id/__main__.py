@@ -8,6 +8,7 @@ check confirms the same song was still playing.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import signal
 import time
@@ -18,13 +19,13 @@ import numpy as np
 
 from . import web
 from .audio import ffmpeg_blocks, level_db
-from .config import AI_NOTE, BLOCK_SECONDS, SIGNATURE, Settings
+from .config import AI_NOTE, APP_NAME, BLOCK_SECONDS, SIGNATURE, Settings
 from .detector import Detector, Event
 from .fingerprint import FRAMES_PER_SECOND, hashes
 from .library import Library
 from .mqtt import Publisher
 from .recognize import Recognizer
-from .spin import LENGTH_GRACE, Spin
+from .spin import EXPIRE_AFTER, LENGTH_GRACE, Spin
 
 log = logging.getLogger("vinyl_id")
 FRAMES_PER_BLOCK = BLOCK_SECONDS * FRAMES_PER_SECOND
@@ -56,7 +57,8 @@ class App:
         self.epoch = 0                         # goes up whenever what's playing may have changed
         self._task: asyncio.Task | None = None  # the identification in flight (kept so it isn't dropped)
         self._last_level: tuple[float, float] = (0.0, -999.0)
-        self.spin: Spin | None = None          # 'now spinning': the album and track being played
+        self._art_name: str | None = None      # the cover file now_info() picked
+        self.spin: Spin | None = self._load_spin()   # 'now spinning': the album and track being played
         self.song_start = 0.0                  # block index where the current song began (learning is stored relative to it)
         self.start_exact = False               # True once Shazam or a local match told us the real position
 
@@ -125,6 +127,7 @@ class App:
                 if self.spin:
                     if self.spin.started(self.clock()) == "expired":
                         self.spin = None
+                        self._save_spin()
                     else:
                         self._spin_sync()
                 self._schedule(self.s.settle_seconds)
@@ -269,6 +272,35 @@ class App:
         self.lib.played(sid)
         self.pub.library(self.lib.size())
         self.refresh_now()
+        self._save_spin()
+
+    # The album being followed is remembered across restarts (an update mid-record).
+    @property
+    def _spin_file(self) -> Path:
+        return Path(self.s.data_dir) / "spin.json"
+
+    def _save_spin(self) -> None:
+        try:
+            if self.spin:
+                self._spin_file.write_text(json.dumps(
+                    {"album_id": self.spin.album_id, "track_id": self.spin.cur["id"], "saved": time.time()}))
+            else:
+                self._spin_file.unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning("Could not save the album being followed: %s", exc)
+
+    def _load_spin(self) -> Spin | None:
+        try:
+            saved = json.loads(self._spin_file.read_text())
+            tracks = self.lib.album_tracks(saved["album_id"])
+            i = next(k for k, t in enumerate(tracks) if t["id"] == saved["track_id"])
+            if time.time() - saved["saved"] > EXPIRE_AFTER:
+                return None
+        except (OSError, ValueError, KeyError, StopIteration):
+            return None
+        spin = Spin(saved["album_id"], tracks, i)
+        spin.stopped_at = self.clock()     # the next start resumes this track, position unknown
+        return spin
 
     def start_spin(self, album_id: int, side: str = "", pos: int = 1) -> bool:
         """Pick the album and where on it you are (default A1)."""
@@ -286,8 +318,16 @@ class App:
             self._schedule(self.s.settle_seconds)
         return True
 
+    def stream_title(self) -> tuple[str, str]:
+        """(what the record stream calls itself right now, cover address)."""
+        info = self.now_info() if self.det.playing else None
+        if not info:
+            return APP_NAME, ""
+        return " - ".join(x for x in (info["artist"], info["title"]) if x), info["art_url"]
+
     def end_spin(self) -> None:
         self.spin = None
+        self._save_spin()
         if self.det.playing:
             self._schedule(self.s.settle_seconds)
             self.refresh_now()
@@ -307,6 +347,7 @@ class App:
         album_id = self.lib.add_album(artist, album) if album else None
         song_id = self.lib.add_song(album_id, title, artist)
         self.spin = None                  # you said what it is: stop following the album
+        self._save_spin()
         if self.s.learn and len(self.recent) * BLOCK_SECONDS >= 5:
             self._learn(song_id, np.concatenate(self.recent), self._rel(self.recent_start))
         self.current, self.current_source, self.unknown = song_id, "manual", False
@@ -321,9 +362,20 @@ class App:
         song = self.lib.song(self.current) if self.current is not None else None
         if not song:
             return None
+        # The disc's own cover (box sets) wins over the album's.
+        disc = None
+        if self.spin and self.spin.album_id == song.album_id:
+            disc = self.spin.cur.get("disc")
+        elif song.album_id:
+            disc = (self.lib.track_in_album(song.album_id, song.id) or {}).get("disc")
+        base = f"{self.s.public_url}/api/albums/{song.album_id}"
+        if disc and (name := self.lib.disc_art_file(song.album_id, disc)):
+            path = f"/discs/{disc}/art"
+        else:
+            name, path = song.art_file, "/art"
+        self._art_name = name
         # ?v= changes only when the cover does, so HA and the M-1 don't download it again per song
-        art_url = (f"{self.s.public_url}/api/albums/{song.album_id}/art?v={self.lib.art_version(song.art_file)}"
-                   if song.art_file else "")
+        art_url = f"{base}{path}?v={self.lib.art_version(name)}" if name else ""
         info = {"id": song.id, "title": song.title, "artist": song.artist, "album": song.album,
                 "album_id": song.album_id, "art_url": art_url, "source": self.current_source}
         if self.spin:
@@ -350,7 +402,7 @@ class App:
         """Send the current song to Home Assistant (new song, or after an edit in the UI)."""
         info = self.now_info()
         if info:
-            self.pub.track(info, self.lib.art_bytes(info["album_id"]) if info["art_url"] else None)
+            self.pub.track(info, self.lib.art_file_bytes(self._art_name) if info["art_url"] else None)
 
     def forget(self, song_id: int) -> None:
         self.lib.forget(song_id)

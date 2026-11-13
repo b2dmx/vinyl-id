@@ -74,6 +74,7 @@ def _norm(s: str) -> str:
     """Compare titles loosely: no case, no '(Remastered)'-style suffix, no punctuation."""
     s = re.sub(r"[\(\[].*?[\)\]]", "", s.lower())
     s = re.sub(r"\s-\s.*(remaster|mix|version|edit|mono|stereo).*$", "", s)
+    s = re.sub(r"^\s*(the|a|an)\s+", "", s)          # Shazam says "Stables", the sleeve "The Stables"
     return re.sub(r"[^a-z0-9]+", "", s)
 
 
@@ -311,6 +312,25 @@ class Library(TrackMixin):
         if r and r[0] and (self.art_dir / r[0]).exists():
             return (self.art_dir / r[0]).read_bytes()
         return None
+
+    # --- a cover per disc of a box set (falls back to the album's) ---------------------
+    @staticmethod
+    def _disc_art_name(album_id: int, disc: int) -> str:
+        return f"{album_id}-disc{disc}.jpg"
+
+    def set_disc_art(self, album_id: int, disc: int, data: bytes) -> None:
+        (self.art_dir / self._disc_art_name(album_id, disc)).write_bytes(as_jpeg(data))
+
+    def disc_art_file(self, album_id: int, disc: int) -> str | None:
+        name = self._disc_art_name(album_id, disc)
+        return name if (self.art_dir / name).exists() else None
+
+    def discs_with_art(self, album_id: int) -> list[int]:
+        return sorted(int(p.stem.split("-disc")[1]) for p in self.art_dir.glob(f"{album_id}-disc*.jpg"))
+
+    def art_file_bytes(self, name: str) -> bytes | None:
+        p = self.art_dir / name
+        return p.read_bytes() if p.exists() else None
 
     def art_version(self, art_file: str) -> int:
         """Changes only when the cover does, so displays re-download it only then."""

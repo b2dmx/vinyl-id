@@ -26,8 +26,8 @@ async def _log_stderr(stream: asyncio.StreamReader) -> None:
             log.warning("ffmpeg: %s", text)
 
 
-async def ffmpeg_blocks(source: str, input_format: str = "") -> AsyncIterator[np.ndarray]:
-    """Yield int16 mono blocks forever, restarting ffmpeg if the source drops."""
+def ffmpeg_input(source: str, input_format: str = "") -> list[str]:
+    """The ffmpeg command up to and including the input."""
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin"]
     if input_format:
         cmd += ["-f", input_format]
@@ -35,7 +35,12 @@ async def ffmpeg_blocks(source: str, input_format: str = "") -> AsyncIterator[np
         cmd += ["-re"]
     if source.startswith(("http://", "https://")):
         cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10"]
-    cmd += ["-i", source, "-f", "s16le", "-ac", "1", "-ar", str(SAMPLE_RATE), "-"]
+    return [*cmd, "-i", source]
+
+
+async def ffmpeg_blocks(source: str, input_format: str = "") -> AsyncIterator[np.ndarray]:
+    """Yield int16 mono blocks forever, restarting ffmpeg if the source drops."""
+    cmd = [*ffmpeg_input(source, input_format), "-f", "s16le", "-ac", "1", "-ar", str(SAMPLE_RATE), "-"]
 
     while True:
         log.info("Opening audio input: %s", source)

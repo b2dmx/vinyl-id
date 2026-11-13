@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 from .config import AI_NOTE, SIGNATURE
+from .stream import record_stream
 
 if TYPE_CHECKING:
     from .__main__ import App
@@ -42,6 +43,11 @@ def build(app: App) -> web.Application:
     @routes.get("/api/status")
     async def status(_):
         return web.json_response({**app.status(), "signature": SIGNATURE, "ai_note": AI_NOTE})
+
+    @routes.get("/stream.mp3")
+    async def stream(req):
+        """The record as a stream that names its songs: play this on your speakers."""
+        return await record_stream(req, app)
 
     @routes.post("/api/now/label")
     async def label_now(req):
@@ -87,11 +93,9 @@ def build(app: App) -> web.Application:
         app.refresh_now()
         return web.json_response({"ok": True})
 
-    @routes.post("/api/albums/{id:\\d+}/art")
-    async def set_art(req):
+    async def image_from(req) -> bytes:
         """An uploaded image (multipart 'file'), JSON {"url": ...} from the picker,
         or JSON {"data": <base64 image>} for tools that can only send JSON."""
-        album_id = int(req.match_info["id"])
         if req.content_type.startswith("multipart/"):
             field = await (await req.multipart()).next()
             data = await field.read(decode=False) if field else None
@@ -109,7 +113,30 @@ def build(app: App) -> web.Application:
                 data = await app.rec.fetch(url)
         if not is_image(data):        # also stops the picker being used to read other web addresses
             raise web.HTTPBadRequest(text="No image")
-        lib.set_art(album_id, bytes(data), locked=True)   # locked: never auto-replaced
+        return bytes(data)
+
+    @routes.post("/api/albums/{id:\\d+}/art")
+    async def set_art(req):
+        lib.set_art(int(req.match_info["id"]), await image_from(req), locked=True)   # locked: never auto-replaced
+        app.refresh_now()
+        return web.json_response({"ok": True})
+
+    @routes.get("/api/albums/{id:\\d+}/discs")
+    async def discs_with_art(req):
+        return web.json_response(lib.discs_with_art(int(req.match_info["id"])))
+
+    @routes.get("/api/albums/{id:\\d+}/discs/{disc:\\d+}/art")
+    async def disc_art(req):
+        name = lib.disc_art_file(int(req.match_info["id"]), int(req.match_info["disc"]))
+        data = lib.art_file_bytes(name) if name else None
+        if not data:
+            raise web.HTTPNotFound()
+        return web.Response(body=data, content_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+
+    @routes.post("/api/albums/{id:\\d+}/discs/{disc:\\d+}/art")
+    async def set_disc_art(req):
+        """A box set's disc cover: shown while that disc plays, instead of the album's."""
+        lib.set_disc_art(int(req.match_info["id"]), int(req.match_info["disc"]), await image_from(req))
         app.refresh_now()
         return web.json_response({"ok": True})
 
