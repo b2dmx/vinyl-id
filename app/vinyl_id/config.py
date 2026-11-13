@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 
 APP_NAME = "Vinyl ID"
-VERSION = "0.6.2"
+VERSION = "0.6.3"
 SIGNATURE = f"{APP_NAME} v{VERSION} by Goobis"
 AI_NOTE = "AI was used to help develop this application"
 
@@ -27,6 +27,7 @@ class Settings:
 
     # Signal detection (dBFS). Tune with the "Input Level" sensor in HA.
     signal_threshold_db: float = _f("SIGNAL_THRESHOLD_DB", -50)
+    start_margin_db: float = _f("START_MARGIN_DB", 12)   # a record starts (and stays on) only with sound this far above the threshold
     start_seconds: float = _f("START_SECONDS", 2)        # sound this long = record started
     stop_seconds: float = _f("STOP_SECONDS", 45)         # quiet this long = record stopped (covers a side flip)
     gap_seconds: float = _f("GAP_SECONDS", 2)            # dip this long between songs = track change

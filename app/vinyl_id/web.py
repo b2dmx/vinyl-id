@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aiohttp import web
+from aiohttp.web_log import AccessLogger
 
 from .config import AI_NOTE, SIGNATURE
 from .stream import record_stream
@@ -246,8 +247,16 @@ def build(app: App) -> web.Application:
     return wa
 
 
+class QuietAccessLog(AccessLogger):
+    """The usual request log, without the status checks that arrive every few seconds."""
+
+    def log(self, request, response, time) -> None:
+        if not (request.method == "GET" and request.path == "/api/status" and response.status == 200):
+            super().log(request, response, time)
+
+
 async def serve(app: App, port: int) -> web.AppRunner:
-    runner = web.AppRunner(build(app))
+    runner = web.AppRunner(build(app), access_log_class=QuietAccessLog)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", port).start()
     log.info("Library UI on port %s", port)

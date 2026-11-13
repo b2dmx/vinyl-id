@@ -47,3 +47,20 @@ def test_jingle_between_gaps_is_its_own_track():
     d = Detector(Settings())
     ev = run(d, -20, 60) + run(d, -60, 3) + run(d, -20, 9) + run(d, -60, 3) + run(d, -20, 30)
     assert ev == [Event.STARTED, Event.TRACK_CHANGE, Event.TRACK_CHANGE]
+
+
+def test_hum_at_the_threshold_is_not_a_record():
+    """An idle turntable hums right around the threshold: that must never start a record."""
+    d = Detector(Settings(signal_threshold_db=-65))
+    ev = []
+    for _ in range(120):                     # 5 minutes of hum wandering between -72 and -61
+        ev += run(d, -63, 1) + run(d, -70, 1) + run(d, -61, 0.5)
+    assert ev == []
+
+
+def test_record_stops_when_only_hum_is_left():
+    d = Detector(Settings(signal_threshold_db=-65))
+    ev = run(d, -35, 60)
+    for _ in range(60):                      # the side has ended; the hum hovers at the threshold
+        ev += run(d, -63, 1) + run(d, -70, 1)
+    assert ev == [Event.STARTED, Event.STOPPED]

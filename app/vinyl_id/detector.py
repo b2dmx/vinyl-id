@@ -37,17 +37,20 @@ class Detector:
     def feed(self, db: float) -> Event | None:
         s, dt = self.s, BLOCK_SECONDS
         has_signal = db >= s.signal_threshold_db
+        # Hum and hiss sit right at the threshold. Only clearly louder sound starts a record
+        # or keeps it going; the threshold itself only tells a quiet passage from a gap.
+        is_music = db >= s.signal_threshold_db + s.start_margin_db
 
         if not self.playing:
-            self._loud = self._loud + dt if has_signal else 0.0
+            self._loud = self._loud + dt if is_music else 0.0
             if self._loud >= s.start_seconds:
                 self.playing, self._quiet, self._dip = True, 0.0, 0.0
                 self._recent.clear()
                 return Event.STARTED
             return None
 
-        # Playing: long silence means the record stopped.
-        self._quiet = 0.0 if has_signal else self._quiet + dt
+        # Playing: no music for a long time means the record stopped.
+        self._quiet = 0.0 if is_music else self._quiet + dt
         if self._quiet >= s.stop_seconds:
             self.playing, self._loud = False, 0.0
             return Event.STOPPED
