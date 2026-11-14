@@ -116,6 +116,6 @@ The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.9.0 by Goobis<br>
+  Vinyl ID v0.9.1 by Goobis<br>
   AI was used to help develop this application
 </p>
