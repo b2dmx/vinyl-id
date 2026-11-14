@@ -28,7 +28,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: VinylConfigEntry) -> boo
     set_listener_hidden(hass, opts.get(CONF_LISTENER), True)
     if opts.get(CONF_SOURCE_PLAYER) and opts.get(CONF_SOURCE_NAME) and opts.get(CONF_LISTENER):
         router = Router(hass, opts[CONF_SOURCE_PLAYER], opts[CONF_SOURCE_NAME], opts[CONF_LISTENER],
-                        opts.get(CONF_MONITOR))
+                        opts.get(CONF_MONITOR), coordinator.hears_nothing)
         for stop in router.start():
             entry.async_on_unload(stop)
         entry.async_create_background_task(hass, router.check(), "vinyl_id first routing check")

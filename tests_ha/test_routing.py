@@ -129,3 +129,17 @@ async def test_a_switch_that_will_not_switch_is_left_for_a_while(hass):
     await router.check()
     await router.check()
     assert len(tries) == 1 and router._retry == routing.RETRY_AFTER      # the record's own back-off is untouched
+
+
+async def test_connected_on_paper_but_the_app_hears_nothing(hass):
+    cast(hass)                                                     # playing its line-in, listener grouped
+    hass.states.async_set(EAR, "playing")
+    join = async_mock_service(hass, "media_player", "join")
+    silent = {"now": False}
+    router = Router(hass, CAST, LINE_IN, EAR, None, lambda: silent["now"])
+    await router.check()
+    assert not join                                               # the app hears the record: nothing to do
+    silent["now"] = True
+    await router.check()
+    await router.check()                                          # and not again at once
+    assert len(join) == 1 and join[0].data["group_members"] == [EAR]

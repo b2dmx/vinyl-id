@@ -472,6 +472,15 @@ class App:
         """Shazam or a local match said where in the song the clip started: fix the song's start."""
         if pos is None:
             return False
+        if self.spin and self.spin.anchored and self.spin.start is not None:
+            # This track's start was heard: the needle drop, or the gap before it. A position worked
+            # out from a fingerprint may be off (learned from an earlier play that began elsewhere),
+            # so where the two disagree, what was heard stands.
+            now_pos = pos + (self.block_i - clip_start) * BLOCK_SECONDS
+            if abs((self.clock() - now_pos) - self.spin.start) > 5:
+                self.song_start = self.block_i - (self.clock() - self.spin.start) / BLOCK_SECONDS
+                self.start_exact = True
+                return False
         self.song_start, self.start_exact = clip_start - pos / BLOCK_SECONDS, True
         if self.spin:
             now_pos = pos + (self.block_i - clip_start) * BLOCK_SECONDS
@@ -504,8 +513,12 @@ class App:
     def _save_spin(self) -> None:
         try:
             if self.spin:
+                # "saved" is when the record was last heard: now while it plays, else when it stopped.
+                # (Saving again later, after an edit on the page, must not make an old record look fresh.)
+                idle = self.clock() - self.spin.stopped_at if self.spin.stopped_at is not None else 0.0
                 self._spin_file.write_text(json.dumps(
-                    {"album_id": self.spin.album_id, "track_id": self.spin.cur["id"], "saved": time.time(),
+                    {"album_id": self.spin.album_id, "track_id": self.spin.cur["id"],
+                     "saved": time.time() - max(0.0, idle),
                      "auto": self.spin.auto, "side_ended": self.spin.at_side_end}))
             else:
                 self._spin_file.unlink(missing_ok=True)

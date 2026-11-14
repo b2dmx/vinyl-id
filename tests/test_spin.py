@@ -454,3 +454,46 @@ def test_an_album_that_proved_itself_is_kept_when_shazam_uses_another_name(tmp_p
     app = _run(tmp_path, monkeypatch, side, shazam, before=preload)
     assert app.spin is not None and app.spin.auto and app.spin.cur["title"] == "Song Three"      # still followed
     assert app.lib.shazam_song("shz-other") is None                                              # nothing saved for it
+
+
+def test_a_start_that_was_heard_is_marked_and_a_guessed_one_is_not():
+    sp = Spin(1, [dict(t) for t in LP], 0)
+    assert sp.started(0.0) == "new" and sp.anchored             # the needle drop
+    assert sp.tick(64.0) and not sp.anchored                    # moved on by the clock: an estimate
+    assert sp.track_change(66.0) and sp.anchored                # the gap came after all
+    sp.jump(2, None)
+    assert not sp.anchored
+
+
+def test_a_heard_start_is_not_moved_by_a_fingerprint_that_disagrees(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_mod, "Publisher", Pub)
+    app = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x"))
+    app.clock = FakeClock()
+    app.clock.t = 100.0
+    app.block_i = 400
+    app.spin = Spin(1, [dict(t) for t in LP], 0, start=40.0)
+    app.spin.anchored = True
+    assert not app._apply_position(20.0, 396)                   # "the clip began 20 s in": the song started at 79?
+    assert app.spin.start == 40.0                               # no: it started when the gap was heard
+    assert app._apply_position(58.5, 396) is False and abs(app.spin.start - 40.5) < 0.01   # agrees: fine-tuned
+    app.spin.anchored = False
+    app._apply_position(20.0, 396)
+    assert abs(app.spin.start - 79.0) < 0.01                    # nothing heard to go by: the fingerprint decides
+
+
+def test_an_old_record_does_not_look_fresh_after_a_later_save(tmp_path, monkeypatch):
+    import json as _json
+    import time as _time
+
+    monkeypatch.setattr(main_mod, "Publisher", Pub)
+    app = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x"))
+    app.clock = FakeClock()
+    album = app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks())
+    app.start_spin(album)
+    app.clock.t = 1000.0
+    app.spin.stopped(1000.0)
+    app.clock.t = 1000.0 + 3 * 3600                              # three hours later, an edit on the page
+    app.tracks_changed(album)
+    saved = _json.loads((tmp_path / "spin.json").read_text())["saved"]
+    assert _time.time() - saved > 3 * 3600 - 5
+    assert main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x")).spin is None      # too old to resume

@@ -13,6 +13,7 @@ in-sync as soon as other speakers join, so every room plays together.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import timedelta
 import logging
 import time
@@ -44,12 +45,13 @@ GONE = (STATE_UNAVAILABLE, STATE_UNKNOWN)
 
 class Router:
     def __init__(self, hass: HomeAssistant, source_player: str, source_name: str, listener: str,
-                 monitor: str | None) -> None:
+                 monitor: str | None, hears_nothing: Callable[[], bool] = lambda: False) -> None:
         self.hass = hass
         self.player = source_player
         self.source = source_name
         self.listener = listener
         self.monitor = monitor
+        self.hears_nothing = hears_nothing       # the app says no sound reaches it at all
         self._last_try = 0.0
         self._retry = RETRY_AFTER
         self._busy = False
@@ -136,6 +138,15 @@ class Router:
             await self._call(MP_DOMAIN, "join", self.player, group_members=[self.listener])
             return
 
+        if self.hears_nothing():
+            # Everything says "connected", yet the app gets no sound: after the app restarts, Music
+            # Assistant can go on showing the old group while nothing flows. Join it again.
+            if time.monotonic() - self._last_try < self._retry:
+                return
+            self._last_try = time.monotonic()
+            _LOGGER.info("The app hears nothing although it shows as connected: joining %s again", self.listener)
+            await self._call(MP_DOMAIN, "join", self.player, group_members=[self.listener])
+            return
         self._retry = RETRY_AFTER                    # connected: the next drop is tried promptly again
         await self._set_monitor(others=[m for m in members if m not in (self.player, self.listener)])
 

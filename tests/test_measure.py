@@ -55,3 +55,13 @@ def test_a_flip_is_timed_up_to_the_quiet_and_lost_sound_ends_nothing():
     t.gap(sp, 180.0, 20.0, late=False, moved=True, was=1)
     assert t.settle(True) == [(2, 60.0, Q_GAP)]
     assert t.stopped(sp, 300.0, 45.0, lost=True) == [] and t.open is None
+
+
+def test_a_song_that_ends_in_several_silences_is_timed_to_the_last():
+    sp, t = spin(), TrackTimer()
+    t.begin(1, 0.0)
+    sp.i = 1
+    t.gap(sp, 44.0, 2.5, late=False, moved=True, was=0)       # the first silence of the ending
+    assert t.gap(sp, 48.0, 2.5, late=True, moved=True, was=1) == []
+    assert t.gap(sp, 60.0, 5.5, late=True, moved=True, was=1) == []      # the real gap
+    assert t.settle(True) == [(1, 60.0, Q_GAP)] and t.open.began == 60.0

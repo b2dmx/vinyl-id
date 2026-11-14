@@ -32,6 +32,7 @@ class Spin:
         # that is heard is still that same song change, not another one.
         self.same_until: float | None = None
         self.seen: set[int] = set()      # the tracks recognition has confirmed since this album was picked
+        self.anchored = False            # `start` was heard (needle drop, or the gap before this track)
         self.overrun = False             # the track was heard past its listed length: wait for the gap
         self.guessed = False             # on this track only because a long quiet looked like a flip
         self._wall: tuple[float | None, float] = (None, 0.0)   # (start, the same as wall-clock time)
@@ -61,7 +62,7 @@ class Spin:
         nxt = self.next_in_side()
         if nxt is not None and now - self.start >= self.cur["length"] + LENGTH_GRACE:
             self.start += self.cur["length"]
-            self.i, self.same_until = nxt, now + LATE_GAP
+            self.i, self.same_until, self.anchored = nxt, now + LATE_GAP, False
             return True
         return False
 
@@ -99,7 +100,7 @@ class Spin:
         late = self.late_gap(now)
         self.overrun, self.guessed = False, False
         if late:
-            self.start = now
+            self.start, self.anchored = now, True
             return True
         # Moving on before the listed end: until that end has passed, another gap is this same change
         length = self.cur.get("length")
@@ -111,13 +112,13 @@ class Spin:
             self.guessed = nxt is not None       # ... or a very quiet stretch in the side's last song
         if nxt is None:
             return False
-        self.i, self.start = nxt, now
+        self.i, self.start, self.anchored = nxt, now, True
         return True
 
     def started(self, now: float) -> str:
         """The record started playing: 'expired', 'flip' (next side), 'resume' or 'new'."""
         if self.stopped_at is None:
-            self.start = now
+            self.start, self.anchored = now, True
             return "new"
         gone, self.stopped_at = now - self.stopped_at, None
         self.same_until, self.overrun, self.guessed = None, False, False
@@ -128,9 +129,9 @@ class Spin:
         if ended and nxt is None and self.auto:
             return "expired"                     # the last side was played out: whatever starts now is new
         if gone <= SIDE_FLIP_WINDOW and nxt is not None and ended:
-            self.i, self.start = nxt, now
+            self.i, self.start, self.anchored = nxt, now, True
             return "flip"
-        self.start = None
+        self.start, self.anchored = None, False
         return "resume"
 
     def stopped(self, now: float, side_end: bool = True) -> None:
@@ -139,7 +140,7 @@ class Spin:
         self.stopped_at, self.start = now, None
 
     def jump(self, i: int, start: float | None) -> None:
-        self.i, self.start = i, start
+        self.i, self.start, self.anchored = i, start, False
         self.same_until, self.overrun, self.guessed = None, False, False
 
     # --- for display ---------------------------------------------------------------

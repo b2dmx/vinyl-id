@@ -22,6 +22,7 @@ class Timing:
 
 
 Measured = tuple[int, float, int]      # (track id, seconds, how sure)
+Candidate = tuple[int, float, int, float]   # the same, plus when the track began
 
 
 class TrackTimer:
@@ -31,7 +32,7 @@ class TrackTimer:
     def reset(self) -> None:
         self.open: Timing | None = None     # the track being timed
         self.wait: Timing | None = None     # the one before it, whose end has not been heard yet
-        self.cand: Measured | None = None   # measured at a gap that nothing has confirmed yet
+        self.cand: Candidate | None = None  # measured at a gap that nothing has confirmed yet
 
     def begin(self, track_id: int, began: float, q: int = Q_GAP) -> None:
         self.open = Timing(track_id, began, q)
@@ -47,14 +48,21 @@ class TrackTimer:
     def gap(self, sp: Spin, now: float, dip: float, late: bool, moved: bool, was: int) -> list[Measured]:
         """A gap was heard. `was`: the track index before it; `late`: the listed length had
         already moved the album on, so the gap ends the track before that one."""
+        done = sp.tracks[was - 1] if late and was > 0 else sp.tracks[was]
+        if late and moved and self.cand and self.cand[0] == done["id"]:
+            # A song may end in several short silences. The first moved the album on; this one
+            # belongs to the same ending, so the track ran until now.
+            track_id, _, q, began = self.cand
+            self.cand = (track_id, now - began, q, began)
+            self.begin(sp.cur["id"], now)
+            return []
         out = self.settle(False)
         src = self.wait if late else self.open
-        done = sp.tracks[was - 1] if late and was > 0 else sp.tracks[was]
         self.wait = self.open = None
         if moved:
             if src and src.track_id == done["id"]:
                 end = now - dip if sp.cur["side"] != done["side"] else now   # a flip: up to where the quiet began
-                self.cand = (done["id"], end - src.began, min(src.q, Q_GAP))
+                self.cand = (done["id"], end - src.began, min(src.q, Q_GAP), src.began)
             self.begin(sp.cur["id"], now)
         return out
 
