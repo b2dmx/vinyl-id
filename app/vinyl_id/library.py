@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS tracks (
   disc INTEGER NOT NULL DEFAULT 1, side TEXT NOT NULL, pos INTEGER NOT NULL, title TEXT NOT NULL,
   length REAL, song_id INTEGER, measured REAL, measured_q INTEGER, typed REAL);
 CREATE INDEX IF NOT EXISTS tracks_album ON tracks (album_id, n);
+CREATE TABLE IF NOT EXISTS aliases (
+  shazam_id TEXT PRIMARY KEY, song_id INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS leftovers (
   id INTEGER PRIMARY KEY, file TEXT NOT NULL, artist TEXT NOT NULL, album TEXT NOT NULL,
   disc INTEGER, removed_at REAL NOT NULL);
@@ -275,8 +277,10 @@ class TrackMixin:
         self.db.execute("DELETE FROM hashes WHERE song_id=?", (src,))
         self.db.execute("UPDATE tracks SET song_id=NULL WHERE song_id=?", (src,))
         self.db.execute("DELETE FROM songs WHERE id=?", (src,))
-        self.db.execute("UPDATE songs SET shazam_id=COALESCE(shazam_id, ?), plays=plays+?, hashes=hashes+? WHERE id=?",
-                        (old["shazam_id"], old["plays"], moved, dst))
+        self.db.execute("UPDATE aliases SET song_id=? WHERE song_id=?", (dst, src))
+        if old["shazam_id"]:              # both names Shazam has for it are kept
+            self.db.execute("INSERT OR REPLACE INTO aliases (shazam_id, song_id) VALUES (?,?)", (old["shazam_id"], dst))
+        self.db.execute("UPDATE songs SET plays=plays+?, hashes=hashes+? WHERE id=?", (old["plays"], moved, dst))
         self._gc_album(old["album_id"], keep_fetched=False)
         self.db.commit()
 
@@ -417,8 +421,37 @@ class Library(TrackMixin):
     @locked
     def shazam_song(self, shazam_id: str) -> int | None:
         """The song already saved under this Shazam id."""
-        row = self.db.execute("SELECT id FROM songs WHERE shazam_id=?", (shazam_id,)).fetchone() if shazam_id else None
+        if not shazam_id:
+            return None
+        row = (self.db.execute("SELECT id FROM songs WHERE shazam_id=?", (shazam_id,)).fetchone()
+               or self.db.execute("SELECT a.song_id FROM aliases a JOIN songs s ON s.id = a.song_id "
+                                  "WHERE a.shazam_id=?", (shazam_id,)).fetchone())
         return row[0] if row else None
+
+    @locked
+    def alias_shazam(self, song_id: int, shazam_id: str) -> None:
+        """You said that what Shazam finds under this id is this song (it may know a track by
+        another name than the sleeve, or take it for another recording)."""
+        self.db.execute("UPDATE songs SET shazam_id=NULL WHERE shazam_id=? AND id<>?", (shazam_id, song_id))
+        self.db.execute("INSERT OR REPLACE INTO aliases (shazam_id, song_id) VALUES (?,?)", (shazam_id, song_id))
+        self.db.commit()
+
+    @locked
+    def retrack(self, song_id: int, track: dict) -> int:
+        """You said this song is that track of the album. It becomes the track's song, with what
+        was learned of it and the name Shazam knows it by. Returns the song id to use."""
+        own = self.db.execute("SELECT song_id FROM tracks WHERE id=?", (track["id"],)).fetchone()
+        self.db.execute("UPDATE tracks SET song_id=NULL WHERE song_id=?", (song_id,))
+        if own and own["song_id"] and own["song_id"] != song_id and self.song(own["song_id"]):
+            self._merge(song_id, own["song_id"])
+            return own["song_id"]
+        was = self.db.execute("SELECT album_id FROM songs WHERE id=?", (song_id,)).fetchone()
+        self.db.execute("UPDATE tracks SET song_id=? WHERE id=?", (song_id, track["id"]))
+        self.db.execute("UPDATE songs SET title=?, album_id=? WHERE id=?", (track["title"], track["album_id"], song_id))
+        if was and was["album_id"] != track["album_id"]:
+            self._gc_album(was["album_id"], keep_fetched=False)
+        self.db.commit()
+        return song_id
 
     @locked
     def tag_shazam(self, song_id: int, shazam_id: str, artist: str) -> None:
@@ -514,6 +547,7 @@ class Library(TrackMixin):
         was = self.db.execute("SELECT album_id FROM songs WHERE id=?", (song_id,)).fetchone()
         self.db.execute("DELETE FROM hashes WHERE song_id=?", (song_id,))
         self.db.execute("DELETE FROM songs WHERE id=?", (song_id,))
+        self.db.execute("DELETE FROM aliases WHERE song_id=?", (song_id,))
         self.db.execute("UPDATE tracks SET song_id=NULL WHERE song_id=?", (song_id,))
         self._gc_album(was and was["album_id"])
         self.db.commit()

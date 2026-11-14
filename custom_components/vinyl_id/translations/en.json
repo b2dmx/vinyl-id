@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Vinyl ID",
-        "description": "Adds a Record Player that shows the song, cover and progress of the record the Vinyl ID app hears. Vinyl ID v0.11.0 by Goobis. AI was used to help develop this application.",
+        "description": "Adds a Record Player that shows the song, cover and progress of the record the Vinyl ID app hears. Vinyl ID v0.12.0 by Goobis. AI was used to help develop this application.",
         "data": {
           "url": "Address of the Vinyl ID app",
           "speaker": "Speaker that plays your record (optional)",
@@ -16,13 +16,15 @@
         }
       },
       "line_in": {
-        "title": "The line-in",
-        "description": "Vinyl ID connects the record to the app through these two, and keeps it connected.",
+        "title": "Connections",
+        "description": "How the record gets to your speaker and to the app. Vinyl ID sets these up when a record starts and keeps them that way.",
         "data": {
+          "speaker_source": "Your speaker's input for the record (optional)",
           "source_name": "That player's line-in",
           "listener": "The app's silent speaker"
         },
         "data_description": {
+          "speaker_source": "The input on your speaker or amp that the record player comes in on, for example Optical or Line In. The Record Player switches your speaker to it whenever a record starts. Leave empty to switch inputs yourself.",
           "source_name": "The line-in in that player's list of sources. If the list is empty, type the name exactly as the player shows it.",
           "listener": "The speaker the Vinyl ID app created in Music Assistant, named Vinyl ID Listener unless you renamed it in the app. If it is not in the list yet, wait a minute and open this form again. It is hidden from dashboards, since it is not the player to look at. It keeps working and stays under Settings > Entities."
         },
@@ -70,13 +72,15 @@
         }
       },
       "line_in": {
-        "title": "The line-in",
-        "description": "Vinyl ID connects the record to the app through these two, and keeps it connected.",
+        "title": "Connections",
+        "description": "How the record gets to your speaker and to the app. Vinyl ID sets these up when a record starts and keeps them that way.",
         "data": {
+          "speaker_source": "Your speaker's input for the record (optional)",
           "source_name": "That player's line-in",
           "listener": "The app's silent speaker"
         },
         "data_description": {
+          "speaker_source": "The input on your speaker or amp that the record player comes in on, for example Optical or Line In. The Record Player switches your speaker to it whenever a record starts. Leave empty to switch inputs yourself.",
           "source_name": "The line-in in that player's list of sources. If the list is empty, type the name exactly as the player shows it.",
           "listener": "The speaker the Vinyl ID app created in Music Assistant, named Vinyl ID Listener unless you renamed it in the app. If it is not in the list yet, wait a minute and open this form again. It is hidden from dashboards, since it is not the player to look at. It keeps working and stays under Settings > Entities."
         },

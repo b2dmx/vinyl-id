@@ -255,3 +255,26 @@ def test_measured_lengths_and_what_replaces_what(tmp_path):
 
     lib.add_tracks(album, "mb", tracks)                      # the track list fetched again: measurements stay
     assert lib.album_tracks(album)[1]["length"] == 55
+
+
+def test_teaching_what_shazam_calls_a_track(tmp_path):
+    lib = Library(tmp_path)
+    tracks = [{"n": 1, "side": "A", "pos": 1, "title": "Opening Theme"},
+              {"n": 2, "side": "B", "pos": 1, "title": "Closing Credits"}]
+    album = lib.add_album_from_release("Band", "LP", "mb", tracks)
+    a1, b1 = lib.album_tracks(album)
+
+    # Shazam calls the opening "Credits"; the app took that for the B-side track and learned it there
+    wrong, _ = lib.upsert("Credits", "Band", "LP", "shz-credits")
+    wrong = lib.attach_song(wrong, b1)
+    lib.learn(wrong, [(1, 0), (2, 1)], 0)
+    song = lib.retrack(wrong, a1)                              # "it is A1"
+    assert lib.album_tracks(album)[0]["song_id"] == song and lib.album_tracks(album)[1]["song_id"] is None
+    assert lib.song(song).title == "Opening Theme" and lib.hash_count(song) == 2
+    assert lib.shazam_song("shz-credits") == song              # found as "Credits" again, it is A1
+
+    own = lib.song_for_track(b1["id"])                         # the B-side track gets a song of its own
+    lib.alias_shazam(own, "shz-other-name")                    # and Shazam's own name for it
+    assert lib.shazam_song("shz-other-name") == own
+    lib.forget(own)
+    assert lib.shazam_song("shz-other-name") is None

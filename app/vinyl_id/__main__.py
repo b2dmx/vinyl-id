@@ -82,6 +82,7 @@ class App:
         self._labelled_at = -1e9               # when a song was last named by hand
         self._counted: int | None = None       # the song whose play was counted last
         self._found_at = -1e9                  # when the song on screen was last recognized
+        self._marked_at = 0.0                  # when the current song began (as far as is known)
         self._unkept = 0                       # blocks not kept for learning (the 5-minute limit)
         self.timer = TrackTimer()              # measures the followed album's track lengths
 
@@ -152,6 +153,7 @@ class App:
     def _mark_start(self) -> None:
         self.song_start, self.start_exact = self.block_i, False
         self.rejected = None
+        self._marked_at = self.clock()
 
     def _reset_learning(self) -> None:
         self.learn_blocks, self.learn_start, self._unkept = [], self.block_i, 0
@@ -262,6 +264,10 @@ class App:
                         self._spin_sync()
                         if how in ("new", "flip"):       # a needle drop at the top of a side
                             self.timer.begin(self.spin.cur["id"], self.clock() - self.s.start_seconds)
+                self._schedule(self.s.settle_seconds, quick=True)
+            elif ev is Event.TRACK_CHANGE and self.spin and (early := self.spin.early_gap(self.clock())):
+                # the title stays; but listen again, in case the record really is somewhere else
+                log.info("Quiet passage, not a gap: this track should run another %d s", early)
                 self._schedule(self.s.settle_seconds, quick=True)
             elif ev is Event.TRACK_CHANGE:
                 log.info("Track change detected")
@@ -411,7 +417,7 @@ class App:
             tr = self.lib.track_in_album(self.spin.album_id, song_id)
             if tr is None:
                 seen = self.spin.mismatch
-                if self.spin.auto and seen and seen.get("id") == song_id:
+                if self.spin.auto and not self.spin.trusted and seen and seen.get("id") == song_id:
                     # the album was only a guess, and the same other song was heard twice: let go
                     log.info("Not this album after all; following stopped")
                     self.spin = None
@@ -423,6 +429,7 @@ class App:
                     self.refresh_now()
                 return None
             self.spin.mismatch = None
+            self.spin.seen.add(tr["id"])
             song_id = self.lib.attach_song(song_id, tr)
             j = next(i for i, t in enumerate(self.spin.tracks) if t["id"] == tr["id"])
             if j != self.spin.i:
@@ -450,14 +457,14 @@ class App:
         key = track.shazam_id or f"{track.title}|{track.artist}"
         seen = self.spin.mismatch
         if seen and seen.get("key") == key:
-            if not self.spin.auto:
+            if not self.spin.auto or self.spin.trusted:
                 return False
             log.info("Not this album after all; following stopped")
             self.spin = None
             self._save_spin()
             return True
-        self.spin.mismatch = {"id": None, "key": key, "title": track.title, "artist": track.artist,
-                              "album": track.album}
+        self.spin.mismatch = {"id": None, "key": key, "shazam_id": track.shazam_id, "title": track.title,
+                              "artist": track.artist, "album": track.album}
         self.refresh_now()
         return False
 
@@ -527,6 +534,14 @@ class App:
             return False
         i = next((k for k, t in enumerate(tracks)
                   if t["side"].upper() == (side or tracks[0]["side"]).upper() and t["pos"] == pos), 0)
+        # The song on screen was recognized during this very song, as another track of this album,
+        # and you point at the right one: it was this track all along. Remember that.
+        if (self.det.playing and self.spin and self.spin.album_id == album_id and self.current is not None
+                and self.current_source in ("shazam", "local") and self._found_at >= self._marked_at
+                and tracks[i]["id"] != self.spin.cur["id"]):
+            self.lib.retrack(self.current, tracks[i])
+            log.info("Learned: what was found as %s is %s%s", self.spin.cur["title"], tracks[i]["side"], tracks[i]["pos"])
+            tracks = self.lib.album_tracks(album_id)
         self.spin = Spin(album_id, tracks, i)
         self.timer.reset()
         self._save_spin()
@@ -536,6 +551,23 @@ class App:
             self._mark_start()
             self._spin_sync()
             self._schedule(self.s.settle_seconds, quick=True)
+        return True
+
+    def same_track(self) -> bool:
+        """The song Shazam named, which is not on the album's list, is the track now playing:
+        Shazam only knows it under another name. Remember that."""
+        m = self.spin.mismatch if self.spin else None
+        if not m or not (m.get("id") or m.get("shazam_id")):
+            return False
+        if m.get("id"):
+            self.lib.retrack(m["id"], self.spin.cur)
+            self.spin.tracks = self.lib.album_tracks(self.spin.album_id)
+        else:
+            self.lib.alias_shazam(self.lib.song_for_track(self.spin.cur["id"]), m["shazam_id"])
+        log.info("Learned: %s is %s%s", m["title"], self.spin.cur["side"], self.spin.cur["pos"])
+        self.spin.mismatch = None
+        self.spin.seen.add(self.spin.cur["id"])
+        self._spin_sync()
         return True
 
     def stream_title(self) -> tuple[str, str]:

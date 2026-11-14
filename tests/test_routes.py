@@ -44,6 +44,10 @@ def test_status_and_page(tmp_path, monkeypatch):
         assert (await c.post("/api/spin", json={"album_id": album})).status == 200
         assert len((await (await c.get("/api/status")).json())["spin"]["tracks"]) == 3
         assert "tracks" not in (await (await c.get("/api/status?tracks=0")).json())["spin"]
+        assert (await c.post("/api/spin/same")).status == 409             # nothing to match
+        app.spin.mismatch = {"id": None, "key": "x9", "shazam_id": "x9", "title": "Other Name", "artist": "B", "album": ""}
+        assert (await c.post("/api/spin/same")).status == 200
+        assert app.lib.shazam_song("x9") == app.lib.album_tracks(album)[0]["song_id"] and app.spin.mismatch is None
         assert (await c.delete("/api/spin")).status == 200
         assert (await (await c.get("/api/status")).json())["spin"] is None
         page = await c.get("/")

@@ -169,3 +169,32 @@ async def test_a_line_in_under_another_name_is_found_and_configure_guesses_again
     assert suggested["source_player"] == "media_player.cast"
     r = await hass.config_entries.options.async_configure(r["flow_id"], {})   # cleared again: nothing to look after
     assert r["type"] is FlowResultType.CREATE_ENTRY and r["data"] == {}
+
+
+async def test_the_speaker_is_put_on_the_records_input_when_a_record_starts(hass, aioclient_mock):
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_mock_service
+
+    hass.states.async_set(SPEAKER, "idle", {"source": "Wifi", "source_list": ["Wifi", "Optical"]})
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status(playing=False))
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_URL: URL},
+                            options={CONF_SPEAKER: SPEAKER, "speaker_source": "Optical"})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    select = async_mock_service(hass, "media_player", "select_source")   # after set-up, which registers the real one
+
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status())
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=5))
+    await hass.async_block_till_done()
+    assert [(c.data["entity_id"], c.data["source"]) for c in select] == [(SPEAKER, "Optical")]
+
+
+async def test_the_second_form_offers_the_speakers_inputs(hass, aioclient_mock):
+    hass.states.async_set(SPEAKER, "idle", {"source_list": ["Wifi", "Optical"]})
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status())
+    r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    r = await hass.config_entries.flow.async_configure(r["flow_id"], {CONF_URL: URL, CONF_SPEAKER: SPEAKER})
+    assert r["step_id"] == "line_in" and [k.schema for k in r["data_schema"].schema] == ["speaker_source"]
+    r = await hass.config_entries.flow.async_configure(r["flow_id"], {"speaker_source": "Optical"})
+    assert r["options"] == {CONF_SPEAKER: SPEAKER, "speaker_source": "Optical"}

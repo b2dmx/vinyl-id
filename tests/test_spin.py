@@ -398,3 +398,59 @@ def test_a_guessed_flip_is_believed_when_the_track_ends_on_time():
     assert sp.track_change(90.0, dip=20.0) and sp.guessed            # side B, track "Four", listed 60 s
     assert not sp.flip_held(100.0)                                   # 10 s in: could still be a quiet passage
     assert sp.flip_held(150.0)                                       # a minute in: it really was side B
+
+
+def test_a_quiet_passage_mid_track_is_too_early_to_be_its_end():
+    sp = Spin(1, [dict(t) for t in LP], 0, start=0.0)          # track "One", listed 60 s
+    assert sp.early_gap(20.0) == 40.0                          # 40 s too early: a quiet passage
+    assert sp.early_gap(50.0) == 0.0                           # within 15 s of the end: the end
+    long = Spin(1, [{"id": 1, "side": "A", "pos": 1, "title": "Long", "length": 600},
+                    {"id": 2, "side": "A", "pos": 2, "title": "Next", "length": 60}], 0, start=0.0)
+    assert long.early_gap(540.0) > 0 and long.early_gap(560.0) == 0.0     # 8% of ten minutes: 48 s
+    assert Spin(1, [dict(t) for t in LP], 0).early_gap(20.0) == 0.0       # start not known: nothing to go by
+
+
+def test_a_gap_a_little_before_the_end_and_then_the_real_one_are_one_change():
+    sp = Spin(1, [dict(t) for t in LP], 0, start=0.0)
+    assert sp.track_change(52.0) and sp.i == 1                 # 8 s before the listed end
+    assert sp.track_change(60.0) and sp.i == 1 and sp.start == 60.0      # the real gap: still track 2
+    assert sp.track_change(63.0) and sp.i == 1                 # and one more before the listed end + 5 s
+    assert sp.track_change(125.0) and sp.i == 2                # a minute on: the next song
+
+
+def test_quiet_passages_do_not_run_through_the_track_list(tmp_path, monkeypatch):
+    silence = lambda s: np.zeros(SAMPLE_RATE * s, np.int16)       # noqa: E731
+    # Song One (listed 60 s) has two silences in it; Song Two follows after a real gap
+    side = np.concatenate([fake_song(11, 15), silence(3), fake_song(11, 15), silence(3), fake_song(11, 21),
+                           silence(3), fake_song(12, 60), silence(50)])
+
+    async def never(self, pcm):
+        return None
+
+    app = _run(tmp_path, monkeypatch, side, never, before=lambda app: app.start_spin(
+        app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks()), "A", 1))
+    titles = [i["title"] for i in app.pub.infos]
+    assert "Song Three" not in titles and titles[-1] == "Song Two (Remastered)"
+    assert abs(_measured(app)["Song One"][0] - 60) <= 1.5       # 57 s of song and silences, plus the gap
+
+
+def test_an_album_that_proved_itself_is_kept_when_shazam_uses_another_name(tmp_path, monkeypatch):
+    silence = lambda s: np.zeros(SAMPLE_RATE * s, np.int16)       # noqa: E731
+    side = np.concatenate([fake_song(11, 60), silence(3), fake_song(12, 90), silence(3), fake_song(13, 60), silence(50)])
+    one_side = [{"n": n, "side": "A", "pos": n, "title": t, "length": sec}
+                for n, (t, sec) in enumerate((("Song One", 60), ("Song Two", 90), ("Song Three", 60)), 1)]
+    box = {}
+
+    async def shazam(self, pcm):
+        t = box["app"].clock.t
+        if t > 158:                                                # the third song: under a name of Shazam's own
+            return Track("Some Other Name", "The Band", "", "", "shz-other")
+        return Track("Song One" if t < 63 else "Song Two", "The Band", "", "", "s1" if t < 63 else "s2")
+
+    def preload(app):
+        box["app"] = app
+        app.lib.add_album_from_release("The Band", "Test LP", "mb-1", one_side)
+
+    app = _run(tmp_path, monkeypatch, side, shazam, before=preload)
+    assert app.spin is not None and app.spin.auto and app.spin.cur["title"] == "Song Three"      # still followed
+    assert app.lib.shazam_song("shz-other") is None                                              # nothing saved for it

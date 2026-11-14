@@ -2,6 +2,7 @@
 
 DOMAIN = "vinyl_id"
 CONF_SPEAKER = "speaker"
+CONF_SPEAKER_SOURCE = "speaker_source"
 CONF_LISTENER = "listener"
 CONF_SOURCE_PLAYER = "source_player"
 CONF_SOURCE_NAME = "source_name"

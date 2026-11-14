@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -18,6 +19,7 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.const import ATTR_ENTITY_ID, ATTR_SUPPORTED_FEATURES, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
@@ -25,8 +27,10 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from . import VinylConfigEntry
-from .const import CONF_SPEAKER, DOMAIN
+from .const import CONF_SPEAKER, CONF_SPEAKER_SOURCE, DOMAIN
 from .coordinator import VinylCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 # What the Record Player can pass on to the speaker, when the speaker can do it
 PASSED_ON = F.VOLUME_SET | F.VOLUME_STEP | F.VOLUME_MUTE | F.TURN_ON | F.TURN_OFF
@@ -47,6 +51,8 @@ class RecordPlayer(CoordinatorEntity[VinylCoordinator], MediaPlayerEntity):
     def __init__(self, coordinator: VinylCoordinator, entry: VinylConfigEntry) -> None:
         super().__init__(coordinator)
         self._speaker: str | None = entry.options.get(CONF_SPEAKER)
+        self._speaker_source: str | None = entry.options.get(CONF_SPEAKER_SOURCE)
+        self._was_playing = bool((coordinator.data or {}).get("playing"))
         self._attr_unique_id = entry.entry_id
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)}, name="Record Player", manufacturer="Goobis",
@@ -61,6 +67,26 @@ class RecordPlayer(CoordinatorEntity[VinylCoordinator], MediaPlayerEntity):
     @callback
     def _speaker_changed(self, _event: Event[EventStateChangedData]) -> None:
         self.async_write_ha_state()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        playing = bool((self.coordinator.data or {}).get("playing"))
+        if playing and not self._was_playing and self._speaker_source:
+            self.hass.async_create_task(self._to_record_input())      # the needle dropped
+        self._was_playing = playing
+        super()._handle_coordinator_update()
+
+    async def _to_record_input(self) -> None:
+        """Put the speaker on the input the record comes in on, so nobody has to."""
+        state = self._speaker_state
+        if state is None or state.attributes.get("source") == self._speaker_source:
+            return
+        try:
+            await self.hass.services.async_call(
+                MP_DOMAIN, "select_source", {ATTR_ENTITY_ID: self._speaker, "source": self._speaker_source},
+                blocking=True)
+        except HomeAssistantError as err:
+            _LOGGER.warning("Could not switch %s to %s: %s", self._speaker, self._speaker_source, err)
 
     # --- the record -----------------------------------------------------------
     @property

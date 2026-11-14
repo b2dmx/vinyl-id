@@ -273,6 +273,13 @@ def build(app: App) -> web.Application:
             raise web.HTTPNotFound(text="That album has no track list yet")
         return web.json_response(app.spin_status())
 
+    @routes.post("/api/spin/same")
+    async def same_track(_):
+        """What Shazam named is the track now playing, under another name."""
+        if not app.same_track():
+            raise web.HTTPConflict(text="There is nothing to match right now")
+        return web.json_response(app.spin_status())
+
     @routes.delete("/api/spin")
     async def end_spin(_):
         app.end_spin()

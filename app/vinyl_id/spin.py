@@ -13,6 +13,7 @@ SIDE_FLIP_WINDOW = 300.0     # a restart this soon after a side ends = the next 
 EXPIRE_AFTER = 1800.0        # stopped this long = the record is off the turntable
 LENGTH_GRACE = 3.0           # seconds past a track's listed length before moving on
 LATE_GAP = 15.0              # a gap this soon after moving on by length is that same song change
+END_WINDOW = 15.0            # a gap this close to a track's listed end (or within 8% of its length) is its end
 FLIP_GAP = 8.0               # quiet this long after a side's last track = the record was turned over
 
 
@@ -27,7 +28,10 @@ class Spin:
         self.stopped_at: float | None = None
         self.at_side_end = False         # the last stop was at the end of a side
         self.mismatch: dict | None = None   # a song from outside this album was heard
-        self.ticked_at: float | None = None  # when the listed length last moved it on
+        # After moving on a little before or after a track's real end: until this time, a gap
+        # that is heard is still that same song change, not another one.
+        self.same_until: float | None = None
+        self.seen: set[int] = set()      # the tracks recognition has confirmed since this album was picked
         self.overrun = False             # the track was heard past its listed length: wait for the gap
         self.guessed = False             # on this track only because a long quiet looked like a flip
         self._wall: tuple[float | None, float] = (None, 0.0)   # (start, the same as wall-clock time)
@@ -57,16 +61,31 @@ class Spin:
         nxt = self.next_in_side()
         if nxt is not None and now - self.start >= self.cur["length"] + LENGTH_GRACE:
             self.start += self.cur["length"]
-            self.i, self.ticked_at = nxt, now
+            self.i, self.same_until = nxt, now + LATE_GAP
             return True
         return False
 
+    @property
+    def trusted(self) -> bool:
+        """Recognition has placed two different tracks on this album: it is the right record."""
+        return len(self.seen) >= 2
+
     def late_gap(self, now: float) -> bool:
-        """The listed length ran out a moment ago and moved on already: a gap heard now is that
-        same change, heard late (the song ran longer than listed). Not a second one."""
-        if self.ticked_at is None or self.start is None:
+        """The album moved on a moment ago already (the listed length ran out, or a gap came
+        just before the track's end): a gap heard now is that same change, not a second one."""
+        if self.same_until is None or self.start is None or now > self.same_until:
             return False
-        return now - self.start <= min(LATE_GAP, 0.9 * (self.cur.get("length") or LATE_GAP))
+        return now - self.start <= 0.9 * (self.cur.get("length") or LATE_GAP)
+
+    def early_gap(self, now: float) -> float:
+        """How many seconds too early a gap heard now is, going by the track's length (0 = it
+        fits). A quiet passage in the middle of a song sounds exactly like a gap between two;
+        what tells them apart is that the song is not nearly over yet."""
+        length = self.cur.get("length")
+        if self.start is None or not length or self.overrun or self.late_gap(now):
+            return 0.0
+        left = length - (now - self.start)
+        return left if left > max(END_WINDOW, 0.08 * length) else 0.0
 
     def flip_held(self, now: float) -> bool:
         """A flip guessed from a long quiet: has this track now run about as long as it should?
@@ -78,10 +97,14 @@ class Spin:
     def track_change(self, now: float, dip: float = 0.0) -> bool:
         """A gap between songs was heard (`dip` = how long it was quiet)."""
         late = self.late_gap(now)
-        self.ticked_at, self.overrun, self.guessed = None, False, False
+        self.overrun, self.guessed = False, False
         if late:
             self.start = now
             return True
+        # Moving on before the listed end: until that end has passed, another gap is this same change
+        length = self.cur.get("length")
+        ends = self.start + length if self.start is not None and length else None
+        self.same_until = ends + 5 if ends is not None and now < ends else None
         nxt = self.next_in_side()
         if nxt is None and dip >= FLIP_GAP:
             nxt = self.first_of_next_side()      # turned over faster than a stop is noticed
@@ -97,7 +120,7 @@ class Spin:
             self.start = now
             return "new"
         gone, self.stopped_at = now - self.stopped_at, None
-        self.ticked_at, self.overrun, self.guessed = None, False, False
+        self.same_until, self.overrun, self.guessed = None, False, False
         if gone > EXPIRE_AFTER:
             return "expired"
         nxt = self.first_of_next_side()
@@ -117,7 +140,7 @@ class Spin:
 
     def jump(self, i: int, start: float | None) -> None:
         self.i, self.start = i, start
-        self.ticked_at, self.overrun, self.guessed = None, False, False
+        self.same_until, self.overrun, self.guessed = None, False, False
 
     # --- for display ---------------------------------------------------------------
     def info(self, now: float, wall: float) -> dict:

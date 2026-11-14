@@ -130,10 +130,11 @@ function renderSpin() {
   el.innerHTML = `<div class="card" style="display:grid;gap:12px"><div class="section-head"><div><h3>Now spinning</h3>
     <p class="muted">${esc(sp.album)} · ${esc(sp.artist)}${sp.auto ? " · found by itself" : ""}</p></div>
     <button class="btn tonal" id="unspin">Stop following</button></div>
-    ${sp.mismatch ? `<div class="notice"><b>${esc(sp.mismatch.title)}</b> by ${esc(sp.mismatch.artist)} isn't on this album.
-      <div class="row"><button class="btn tonal sm" id="unspin2">It's a different record</button></div></div>` : ""}
+    ${sp.mismatch ? `<div class="notice">Shazam calls this <b>${esc(sp.mismatch.title)}</b> by ${esc(sp.mismatch.artist)}, which isn't on this album's list.
+      <div class="row"><button class="btn tonal sm" id="same">It's ${esc(sp.tracks[sp.index].side)}${sp.tracks[sp.index].pos}, ${esc(sp.tracks[sp.index].title)}</button><button class="btn text sm" id="unspin2">It's a different record</button></div></div>` : ""}
     <div class="list" style="gap:2px">${rows}</div></div>`;
   for (const id of ["unspin", "unspin2"]) if ($("#" + id)) $("#" + id).onclick = () => api("spin", { method: "DELETE" }).then(refresh, fail);
+  if ($("#same")) $("#same").onclick = () => post("spin/same", {}).then(() => { toast("Got it. Vinyl ID will know it next time."); refresh(); }, fail);
   el.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => {
     const [sd, pos] = b.dataset.go.split("|");
     post("spin", { album_id: sp.album_id, side: sd, pos: Number(pos) }).then(refresh, fail);

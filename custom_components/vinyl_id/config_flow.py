@@ -21,6 +21,7 @@ from .const import (
     CONF_SOURCE_NAME,
     CONF_SOURCE_PLAYER,
     CONF_SPEAKER,
+    CONF_SPEAKER_SOURCE,
     DEFAULT_URL,
     DOMAIN,
 )
@@ -85,27 +86,39 @@ class _LineInStep:
     _picked: dict[str, Any]         # what the first step gave
     _listener_name: str = ""        # what the app calls its silent speaker
 
+    def _needs_second_form(self) -> bool:
+        """There is a line-in to connect, or a speaker that has inputs to choose from."""
+        return bool(self._picked.get(CONF_SOURCE_PLAYER) or _sources(self.hass, self._picked.get(CONF_SPEAKER)))
+
     def _line_in_form(self, step_id: str, old: dict[str, Any]):
-        player = self._picked[CONF_SOURCE_PLAYER]
-        sources = _sources(self.hass, player)
-        source = selector.SelectSelector(selector.SelectSelectorConfig(
-            options=sources, custom_value=True, mode=selector.SelectSelectorMode.DROPDOWN)
-        ) if sources else selector.TextSelector()
-        same = old.get(CONF_SOURCE_PLAYER) == player
-        schema = vol.Schema({
-            _field(CONF_SOURCE_NAME, (old.get(CONF_SOURCE_NAME) if same else None) or _line_in(sources),
-                   required=True): source,
-            _field(CONF_LISTENER, old.get(CONF_LISTENER) or _find_listener(self.hass, self._listener_name),
-                   required=True): PLAYER,
-            vol.Required(ADVANCED): section(
-                vol.Schema({_field(CONF_MONITOR, old.get(CONF_MONITOR) or _guess_switch(self.hass)): SWITCH}),
-                {"collapsed": True}),
-        })
-        return self.async_show_form(step_id=step_id, data_schema=schema)  # type: ignore[attr-defined]
+        fields: dict[Any, Any] = {}
+        if inputs := _sources(self.hass, self._picked.get(CONF_SPEAKER)):
+            kept = old.get(CONF_SPEAKER_SOURCE) if old.get(CONF_SPEAKER) == self._picked[CONF_SPEAKER] else None
+            fields[_field(CONF_SPEAKER_SOURCE, kept)] = selector.SelectSelector(selector.SelectSelectorConfig(
+                options=inputs, custom_value=True, mode=selector.SelectSelectorMode.DROPDOWN))
+        if player := self._picked.get(CONF_SOURCE_PLAYER):
+            sources = _sources(self.hass, player)
+            source = selector.SelectSelector(selector.SelectSelectorConfig(
+                options=sources, custom_value=True, mode=selector.SelectSelectorMode.DROPDOWN)
+            ) if sources else selector.TextSelector()
+            same = old.get(CONF_SOURCE_PLAYER) == player
+            fields |= {
+                _field(CONF_SOURCE_NAME, (old.get(CONF_SOURCE_NAME) if same else None) or _line_in(sources),
+                       required=True): source,
+                _field(CONF_LISTENER, old.get(CONF_LISTENER) or _find_listener(self.hass, self._listener_name),
+                       required=True): PLAYER,
+                vol.Required(ADVANCED): section(
+                    vol.Schema({_field(CONF_MONITOR, old.get(CONF_MONITOR) or _guess_switch(self.hass)): SWITCH}),
+                    {"collapsed": True}),
+            }
+        return self.async_show_form(step_id=step_id, data_schema=vol.Schema(fields))  # type: ignore[attr-defined]
 
     def _options(self, line_in: dict[str, Any] | None) -> dict[str, Any]:
         opts = {k: v for k, v in self._picked.items() if v}
-        if line_in:
+        line_in = line_in or {}
+        if line_in.get(CONF_SPEAKER_SOURCE):
+            opts[CONF_SPEAKER_SOURCE] = line_in[CONF_SPEAKER_SOURCE]
+        if opts.get(CONF_SOURCE_PLAYER) and line_in.get(CONF_SOURCE_NAME):
             opts |= {CONF_SOURCE_NAME: line_in[CONF_SOURCE_NAME], CONF_LISTENER: line_in[CONF_LISTENER]}
             if switch := (line_in.get(ADVANCED) or {}).get(CONF_MONITOR):
                 opts[CONF_MONITOR] = switch
@@ -132,7 +145,7 @@ class VinylConfigFlow(_LineInStep, ConfigFlow, domain=DOMAIN):
             else:
                 self._url, self._listener_name = url, str(status.get("listener") or "")
                 self._picked = {k: user_input.get(k) for k in (CONF_SPEAKER, CONF_SOURCE_PLAYER)}
-                if self._picked[CONF_SOURCE_PLAYER]:
+                if self._needs_second_form():
                     return await self.async_step_line_in()
                 return self.async_create_entry(title="Vinyl ID", data={CONF_URL: url}, options=self._options(None))
         given = user_input or {}
@@ -181,7 +194,7 @@ class VinylOptionsFlow(_LineInStep, OptionsFlow):
         old = self.config_entry.options
         if user_input is not None:
             self._picked = {k: user_input.get(k) for k in (CONF_SPEAKER, CONF_SOURCE_PLAYER)}
-            if self._picked[CONF_SOURCE_PLAYER]:
+            if self._needs_second_form():
                 return await self.async_step_line_in()
             return self._save(None)
         schema = vol.Schema({
@@ -198,7 +211,7 @@ class VinylOptionsFlow(_LineInStep, OptionsFlow):
 
     def _save(self, line_in: dict[str, Any] | None) -> ConfigFlowResult:
         new, old = self._options(line_in), self.config_entry.options.get(CONF_LISTENER)
-        if not line_in and old:
+        if CONF_LISTENER not in new and old:
             new[CONF_LISTENER] = old                      # still the app's speaker, still kept off dashboards
         if old != new.get(CONF_LISTENER):                 # no longer the listener: show it again
             set_listener_hidden(self.hass, old, False)
