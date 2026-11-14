@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from homeassistant.components.media_player import (
     ATTR_MEDIA_VOLUME_LEVEL,
@@ -85,7 +86,14 @@ class RecordPlayer(CoordinatorEntity[VinylCoordinator], MediaPlayerEntity):
 
     @property
     def media_image_url(self) -> str | None:
-        return self._now.get("art_url") or None
+        """Home Assistant fetches the cover itself, so from the address it reaches the app on
+        (the address the app gives is the one for other devices, and may not work from here)."""
+        url = self._now.get("art_url")
+        if not url:
+            return None
+        parts = urlsplit(url)
+        path = parts.path[max(parts.path.find("/api/"), 0):]     # without any prefix of the app's own address
+        return f"{self.coordinator.url.rstrip('/')}{path}" + (f"?{parts.query}" if parts.query else "")
 
     @property
     def media_track(self) -> int | None:

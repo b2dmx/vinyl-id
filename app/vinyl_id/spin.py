@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 SIDE_FLIP_WINDOW = 300.0     # a restart this soon after a side ends = the next side
 EXPIRE_AFTER = 1800.0        # stopped this long = the record is off the turntable
 LENGTH_GRACE = 3.0           # seconds past a track's listed length before moving on
+LATE_GAP = 15.0              # a gap this soon after moving on by length is that same song change
+FLIP_GAP = 8.0               # quiet this long after a side's last track = the record was turned over
 
 
 class Spin:
@@ -25,6 +27,9 @@ class Spin:
         self.stopped_at: float | None = None
         self.at_side_end = False         # the last stop was at the end of a side
         self.mismatch: dict | None = None   # a song from outside this album was heard
+        self.ticked_at: float | None = None  # when the listed length last moved it on
+        self.overrun = False             # the track was heard past its listed length: wait for the gap
+        self._wall: tuple[float | None, float] = (None, 0.0)   # (start, the same as wall-clock time)
 
     @property
     def cur(self) -> dict:
@@ -46,18 +51,32 @@ class Spin:
     # --- events ------------------------------------------------------------------
     def tick(self, now: float) -> bool:
         """Songs that run together: move on once the listed length has passed."""
-        if self.start is None or not self.cur.get("length"):
+        if self.start is None or self.overrun or not self.cur.get("length"):
             return False
         nxt = self.next_in_side()
         if nxt is not None and now - self.start >= self.cur["length"] + LENGTH_GRACE:
             self.start += self.cur["length"]
-            self.i = nxt
+            self.i, self.ticked_at = nxt, now
             return True
         return False
 
-    def track_change(self, now: float) -> bool:
-        """A gap between songs was heard."""
+    def late_gap(self, now: float) -> bool:
+        """The listed length ran out a moment ago and moved on already: a gap heard now is that
+        same change, heard late (the song ran longer than listed). Not a second one."""
+        if self.ticked_at is None or self.start is None:
+            return False
+        return now - self.start <= min(LATE_GAP, 0.9 * (self.cur.get("length") or LATE_GAP))
+
+    def track_change(self, now: float, dip: float = 0.0) -> bool:
+        """A gap between songs was heard (`dip` = how long it was quiet)."""
+        late = self.late_gap(now)
+        self.ticked_at, self.overrun = None, False
+        if late:
+            self.start = now
+            return True
         nxt = self.next_in_side()
+        if nxt is None and dip >= FLIP_GAP:
+            nxt = self.first_of_next_side()      # turned over faster than a stop is noticed
         if nxt is None:
             return False
         self.i, self.start = nxt, now
@@ -69,22 +88,27 @@ class Spin:
             self.start = now
             return "new"
         gone, self.stopped_at = now - self.stopped_at, None
+        self.ticked_at, self.overrun = None, False
         if gone > EXPIRE_AFTER:
             return "expired"
         nxt = self.first_of_next_side()
         ended, self.at_side_end = self.at_side_end, False
+        if ended and nxt is None and self.auto:
+            return "expired"                     # the last side was played out: whatever starts now is new
         if gone <= SIDE_FLIP_WINDOW and nxt is not None and ended:
             self.i, self.start = nxt, now
             return "flip"
         self.start = None
         return "resume"
 
-    def stopped(self, now: float) -> None:
-        self.at_side_end = self.next_in_side() is None
+    def stopped(self, now: float, side_end: bool = True) -> None:
+        """side_end=False: the sound was lost, which says nothing about where the needle is."""
+        self.at_side_end = side_end and self.next_in_side() is None
         self.stopped_at, self.start = now, None
 
     def jump(self, i: int, start: float | None) -> None:
         self.i, self.start = i, start
+        self.ticked_at, self.overrun = None, False
 
     # --- for display ---------------------------------------------------------------
     def info(self, now: float, wall: float) -> dict:
@@ -94,9 +118,16 @@ class Spin:
         return {
             "side": t["side"], "track_number": t["pos"], "side_tracks": side_total,
             "album_tracks": len(self.tracks), "track_length": t.get("length"),
-            "track_started_at": None if self.start is None else
-            _iso(wall - (now - self.start)),
+            "track_started_at": self._started_wall(now, wall),
         }
+
+    def _started_wall(self, now: float, wall: float) -> str | None:
+        """Worked out once per start, so two clocks drifting never move it by a second mid-song."""
+        if self.start is None:
+            return None
+        if self._wall[0] != self.start:
+            self._wall = (self.start, wall - (now - self.start))
+        return _iso(self._wall[1])
 
 
 def _iso(epoch: float) -> str:

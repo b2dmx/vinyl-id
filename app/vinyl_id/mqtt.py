@@ -45,6 +45,12 @@ class Publisher:
             log.error("MQTT %s:%s refused the connection: %s", self.s.mqtt_host, self.s.mqtt_port, reason)
             return
         log.info("Connected to MQTT %s:%s", self.s.mqtt_host, self.s.mqtt_port)
+        self.c.subscribe(f"{self.t}/forget")
+        self.c.subscribe(f"{self.s.discovery_prefix}/status")   # HA's birth message: it restarted
+        self._announce()
+
+    def _announce(self) -> None:
+        """Discovery and the current state: on connecting, and again when Home Assistant restarts."""
         dev = {
             "identifiers": ["vinyl_id"], "name": APP_NAME, "manufacturer": "Goobis",
             "model": SIGNATURE, "sw_version": VERSION,
@@ -78,8 +84,6 @@ class Publisher:
         }
         for topic, cfg in entities.items():
             self.c.publish(topic, json.dumps({**cfg, **common}), retain=True)
-        self.c.subscribe(f"{t}/forget")
-        self.c.subscribe(f"{p}/status")      # HA's birth message: it restarted, so send state again
         self.c.publish(f"{t}/status", "online", retain=True)
         self._resend()
 
@@ -97,7 +101,7 @@ class Publisher:
         if msg.topic == f"{self.t}/forget":
             self.on_forget()
         elif msg.topic == f"{self.s.discovery_prefix}/status" and msg.payload == b"online":
-            self._on_connect()
+            self._announce()
 
     # --- state -----------------------------------------------------------
     def playing(self, on: bool) -> None:

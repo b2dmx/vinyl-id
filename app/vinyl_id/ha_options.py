@@ -15,6 +15,8 @@ def lan_ip() -> str:
     try:
         s.connect(("192.0.2.1", 9))   # no packet is sent; just picks the LAN interface
         return s.getsockname()[0]
+    except OSError:                   # no network yet: start anyway
+        return "127.0.0.1"
     finally:
         s.close()
 

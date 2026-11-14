@@ -158,3 +158,31 @@ def test_a_correction_by_hand_is_not_undone_by_the_next_check(tmp_path, monkeypa
     shown = app.pub.tracks
     said = shown.index(("Right Song", "manual"))
     assert all(t[0] == "Right Song" for t in shown[said:shown.index(None, said)])   # until the record stops
+
+
+def test_fixing_a_typo_in_a_name_you_gave_makes_no_second_song(tmp_path, monkeypatch):
+    async def never(self, pcm):
+        return None
+
+    def label(app, n):
+        if n == int(100 / BLOCK_SECONDS):
+            first = app.label_now("Rare B-sied", "Local Band", "Demo Tape")
+            assert app.label_now("Rare B-side", "Local Band", "Demo Tape") == first
+
+    app = _run(tmp_path, monkeypatch, never, on_block=label)
+    assert [r[0] for r in app.lib.db.execute("SELECT title FROM songs")] == ["Rare B-side"]
+
+
+def test_a_shazam_lookup_that_hangs_does_not_hold_up_the_next_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_mod, "SHAZAM_TIMEOUT", 0.05)
+    monkeypatch.setattr(main_mod, "Publisher", FakePub)
+    app = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x"))
+    app.det.playing = True
+
+    async def hangs(self, pcm):
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(main_mod.Recognizer, "identify", hangs)
+    app.busy = True
+    asyncio.run(app._identify(np.zeros(SAMPLE_RATE * 12, np.int16), 0))
+    assert not app.busy and app.unknown and app.next_check is not None

@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 LOG_DIPS_FROM = 1.0     # dips at least this long are logged, so the settings can be tuned
 DIGITAL_SILENCE = -88   # a record's groove is never this quiet: the stream itself dropped out
 POP_BLOCKS = 2          # this many loud blocks in a row (0.5 s) inside quiet are a click or pop, not music
+POP_AFTER_QUIET = 0.75  # ... but only after this much unbroken quiet: short notes with short rests are music
 
 
 class Event(Enum):
@@ -35,6 +36,9 @@ class Detector:
         self._dip = 0.0        # seconds of the current dip
         self._dip_lo = self._dip_hi = 0.0   # quietest and loudest block of the current dip
         self._pop = 0          # loud blocks in a row since the last quiet one
+        self._calm = 0.0       # seconds of unbroken quiet up to now
+        self._calm_before = 0.0  # ... and before the loud blocks being heard now
+        self.last_dip = 0.0    # how long the last dip was (set when the sound comes back)
         # Over a network receiver, lost audio arrives as exact silence. That is never a gap.
         self._dropouts = s.audio_input_format == "pulse"
 
@@ -66,8 +70,17 @@ class Detector:
             return None
 
         # A click or pop in a gap or in the run-out groove: it neither ends the gap nor keeps the record going
+        if quiet:
+            self._calm += dt
+        else:
+            if self._pop == 0:
+                self._calm_before = self._calm
+            self._calm = 0.0
         self._pop = 0 if quiet else self._pop + 1
-        pop = not quiet and self._pop <= POP_BLOCKS and self._quiet > 0
+        # one block (0.25 s) is always a click, also the second of a pair in a locked groove;
+        # a longer burst only when it came out of real quiet (else it is a short note)
+        pop = not quiet and self._quiet > 0 and (
+            self._pop == 1 or (self._pop <= POP_BLOCKS and self._calm_before >= POP_AFTER_QUIET))
 
         # Playing: nothing but quiet for a long time means the record stopped.
         self._quiet = self._quiet + dt if quiet or pop else 0.0
@@ -87,6 +100,7 @@ class Detector:
         dip, self._dip = self._dip, 0.0
         if dip == 0.0:
             return None
+        self.last_dip = dip
         # Sound is back. A gap is long enough, and was the groove's own quiet, not lost audio.
         dropout = self._dropouts and self._dip_hi <= DIGITAL_SILENCE
         is_gap = dip >= s.gap_seconds and not dropout

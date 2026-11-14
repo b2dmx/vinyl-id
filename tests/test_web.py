@@ -33,3 +33,18 @@ def test_icy_block_is_padded_to_16_bytes():
     b = icy_block("Artist - Song", "http://x/art")
     assert len(b) == 1 + b[0] * 16
     assert b[1:].rstrip(b"\0") == b"StreamTitle='Artist - Song';StreamUrl='http://x/art';"
+
+
+def test_the_version_is_the_same_everywhere():
+    import json
+    import pathlib
+    import re
+
+    from vinyl_id.config import VERSION
+
+    root = pathlib.Path(__file__).parent.parent
+    assert f'version: "{VERSION}"' in (root / "app/config.yaml").read_text(encoding="utf-8")
+    assert f"Vinyl ID v{VERSION} by Goobis" in (root / "README.md").read_text(encoding="utf-8")
+    comp = root / "custom_components/vinyl_id"
+    assert json.loads((comp / "manifest.json").read_text(encoding="utf-8"))["version"] == VERSION
+    assert re.findall(r"Vinyl ID v([\d.]+\d) by Goobis", (comp / "translations/en.json").read_text(encoding="utf-8")) == [VERSION]

@@ -1,7 +1,16 @@
 """The record's path is put back after a restart, and direct/in-sync follows who is listening."""
 from pytest_homeassistant_custom_component.common import async_mock_service
 
+import pytest
+from homeassistant.exceptions import HomeAssistantError
+
+from custom_components.vinyl_id import routing
 from custom_components.vinyl_id.routing import Router
+
+
+@pytest.fixture(autouse=True)
+def no_wait(monkeypatch):
+    monkeypatch.setattr(routing, "IDLE_FOR", 0.0)
 
 CAST, EAR, MONITOR, KITCHEN = "media_player.cast", "media_player.ear", "select.monitor", "media_player.kitchen"
 LINE_IN = "Line In Source"
@@ -59,3 +68,47 @@ async def test_paused_or_switched_off_is_left_alone(hass):
     assert await calls_of(hass) == []
     cast(hass, state="off", source="Queue", members=())
     assert await calls_of(hass) == []
+
+
+async def test_a_player_that_only_just_went_idle_is_given_a_moment(hass, monkeypatch):
+    monkeypatch.setattr(routing, "IDLE_FOR", 10.0)
+    cast(hass, state="idle", source="Queue", members=())          # idle since this instant: maybe between songs
+    hass.states.async_set(EAR, "idle")
+    join = async_mock_service(hass, "media_player", "join")
+    router = Router(hass, CAST, LINE_IN, EAR, None)
+    await router.check()
+    assert not join and router._later is not None                 # nothing yet, and a later look is booked
+    router._cancel_later()
+
+
+async def test_a_join_that_keeps_failing_is_tried_less_and_less(hass):
+    cast(hass, members=(CAST,))
+    hass.states.async_set(EAR, "idle")
+
+    async def refuse(call):
+        raise HomeAssistantError("that speaker cannot be grouped")
+
+    hass.services.async_register("media_player", "join", refuse)
+    router = Router(hass, CAST, LINE_IN, EAR, None)
+    await router.check()                                          # no exception escapes
+    assert router._retry == 2 * routing.RETRY_AFTER
+
+
+async def test_a_change_during_a_check_is_looked_at_afterwards(hass):
+    cast(hass)
+    hass.states.async_set(EAR, "idle")
+    hass.states.async_set(MONITOR, DIRECT, {"options": [DIRECT, SYNC]})
+    seen = []
+
+    async def select(call):
+        seen.append(call.data["option"])
+        if len(seen) == 1:                                        # while this call runs, the kitchen leaves again
+            cast(hass)
+            hass.states.async_set(MONITOR, SYNC, {"options": [DIRECT, SYNC]})
+            await router.check()                                  # as the state change would: it is busy
+
+    hass.services.async_register("select", "select_option", select)
+    router = Router(hass, CAST, LINE_IN, EAR, MONITOR)
+    cast(hass, members=(CAST, EAR, KITCHEN))
+    await router.check()
+    assert seen == [SYNC, DIRECT]

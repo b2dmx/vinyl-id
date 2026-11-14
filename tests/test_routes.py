@@ -76,6 +76,7 @@ def test_albums_songs_and_covers(tmp_path, monkeypatch):
         assert (await c.post(f"/api/albums/{album}/discs/2/art", json=PIC)).status == 404      # no such LP
         assert (await c.post("/api/albums/999/art", json=PIC)).status == 404                   # no such album
         assert (await c.post("/api/albums/999/songs", json={"title": "T"})).status == 404
+        assert (await c.get("/api/albums/99999999999999999999999/art")).status == 400          # not a 500
         assert (await c.post("/api/spin", json={"album_id": album})).status == 404             # no track list
         assert (await c.post("/api/now/label", json={"title": "T", "artist": "A"})).status == 409   # nothing plays
 
@@ -144,6 +145,8 @@ def test_record_stream_names_its_song(tmp_path, monkeypatch):
 
         plain = await c.get("/stream.mp3")                                   # a player that wants no titles
         assert "icy-metaint" not in plain.headers and await plain.read() == b"a" * 2 * every
+
+        assert (await c.head("/stream.mp3")).status == 200 and stream._listeners == 0   # a check starts no encoder
 
         monkeypatch.setattr(stream, "_listeners", stream.MAX_LISTENERS)
         assert (await c.get("/stream.mp3")).status == 503

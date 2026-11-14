@@ -63,6 +63,8 @@ def build(app: App) -> web.Application:
     @routes.get("/stream.mp3")
     async def stream(req):
         """The record as a stream that names its songs: play this on your speakers."""
+        if req.method == "HEAD":            # a player checking the address: no encoder for that
+            return web.Response(headers={"Content-Type": "audio/mpeg"})
         return await record_stream(req, app)
 
     @routes.post("/api/now/label")
@@ -220,6 +222,7 @@ def build(app: App) -> web.Application:
             app.tracks_changed(album_id)
         else:
             album_id = lib.add_album_from_release(rel["artist"], rel["album"], mbid, rel["tracks"])
+            app.tracks_changed(album_id)    # adding an album you already have replaces its track list
         if not lib.album_has_art(album_id):
             if data := await app.rec.front_cover(mbid):
                 await asyncio.to_thread(lib.set_art, album_id, data, False)
@@ -272,14 +275,14 @@ def build(app: App) -> web.Application:
         """A missing field or malformed body is the caller's mistake (400), not a server error."""
         try:
             return await handler(req)
-        except (KeyError, ValueError, TypeError, AttributeError) as exc:
+        except (KeyError, ValueError, TypeError, AttributeError, OverflowError) as exc:
             raise web.HTTPBadRequest(text=f"Bad request: {exc!r}") from exc
 
     allowed = {ip.strip() for ip in app.s.edit_from.split(",") if ip.strip()}
 
     @web.middleware
     async def edits_guard(req, handler):
-        """Covers stay readable on the LAN (for the M-1); changes only from allowed IPs."""
+        """Covers stay readable on the LAN (for displays); changes only from allowed IPs."""
         if allowed and req.method not in ("GET", "HEAD") and req.remote not in allowed:
             raise web.HTTPForbidden(text="This address may not change the library (see EDIT_FROM / Also allow edits from)")
         return await handler(req)

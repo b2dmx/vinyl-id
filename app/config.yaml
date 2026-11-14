@@ -1,5 +1,5 @@
 name: Vinyl ID
-version: "0.8.3"
+version: "0.8.4"
 slug: vinyl_id
 description: Shows what's playing on your record player, with its cover, in Home Assistant.
 url: https://github.com/b2dmx/vinyl-id
@@ -7,7 +7,7 @@ arch:
   - aarch64
   - amd64
 init: false
-host_network: true          # Sendspin/AirPlay discovery, and the cover URL for the M-1
+host_network: true          # Sendspin/AirPlay discovery, and a cover address displays can reach
 ingress: true
 ingress_port: 8780          # not 8095: Music Assistant uses it on the same host network
 panel_icon: mdi:album

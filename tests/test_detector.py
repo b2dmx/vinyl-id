@@ -91,3 +91,19 @@ def test_pops_in_the_run_out_groove_do_not_keep_the_record_going():
     for _ in range(40):                      # the needle sits in the run-out groove: a pop every two seconds
         ev += run(d, -68, 1.75) + run(d, -45, 0.25)
     assert ev == [Event.STARTED, Event.STOPPED]
+
+
+def test_short_notes_with_short_rests_are_music():
+    d = Detector(Settings(signal_threshold_db=-65))
+    ev = run(d, -35, 30)
+    for _ in range(60):                      # a minute of half-second notes and half-second rests
+        ev += run(d, -68, 0.5) + run(d, -35, 0.5)
+    assert ev == [Event.STARTED]             # no track change, and the record did not "stop"
+
+
+def test_two_clicks_per_turn_in_the_run_out_groove_still_stop():
+    d = Detector(Settings(signal_threshold_db=-65))
+    ev = run(d, -35, 30)
+    for _ in range(40):                      # click, a quarter second, click, then the rest of the turn
+        ev += run(d, -45, 0.25) + run(d, -68, 0.25) + run(d, -45, 0.25) + run(d, -68, 1.0)
+    assert ev == [Event.STARTED, Event.STOPPED]

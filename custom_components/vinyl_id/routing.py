@@ -25,12 +25,20 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.const import ATTR_ENTITY_ID, ATTR_OPTION, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, State, callback
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_interval,
+)
+from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
 
 CHECK_EVERY = timedelta(seconds=60)
 RETRY_AFTER = 45.0          # seconds between two attempts to reconnect
+RETRY_AT_MOST = 600.0       # ... growing to this while the attempts keep failing
+IDLE_FOR = 10.0             # idle this long before reconnecting: between two songs a player is idle for a moment
 GONE = (STATE_UNAVAILABLE, STATE_UNKNOWN)
 
 
@@ -43,7 +51,10 @@ class Router:
         self.listener = listener
         self.monitor = monitor
         self._last_try = 0.0
+        self._retry = RETRY_AFTER
         self._busy = False
+        self._again = False                      # something changed while a check was running
+        self._later: CALLBACK_TYPE | None = None
 
     @callback
     def start(self) -> list[CALLBACK_TYPE]:
@@ -51,7 +62,23 @@ class Router:
         return [
             async_track_state_change_event(self.hass, watch, self._changed),
             async_track_time_interval(self.hass, self._tick, CHECK_EVERY),
+            self._cancel_later,
         ]
+
+    @callback
+    def _cancel_later(self) -> None:
+        if self._later:
+            self._later()
+            self._later = None
+
+    @callback
+    def _check_in(self, seconds: float) -> None:
+        async def run(_now) -> None:
+            self._later = None
+            await self.check()
+
+        self._cancel_later()
+        self._later = async_call_later(self.hass, seconds, run)
 
     async def _changed(self, _event: Event) -> None:
         await self.check()
@@ -65,11 +92,20 @@ class Router:
 
     async def check(self) -> None:
         if self._busy:
+            self._again = True                   # look again once the running check is done
             return
         self._busy = True
         try:
-            await self._check()
+            for _ in range(3):
+                self._again = False
+                await self._check()
+                if not self._again:
+                    break
+        except (HomeAssistantError, TimeoutError) as err:
+            self._retry = min(self._retry * 2, RETRY_AT_MOST)
+            _LOGGER.warning("Could not reconnect the record (next try in %d s): %s", self._retry, str(err) or type(err).__name__)
         except Exception:  # noqa: BLE001  a failed call must not stop later checks
+            self._retry = min(self._retry * 2, RETRY_AT_MOST)
             _LOGGER.exception("Could not look after the record's path")
         finally:
             self._busy = False
@@ -85,7 +121,12 @@ class Router:
         if not (on_line_in and playing and self.listener in members):
             if player.state != MediaPlayerState.IDLE and not (playing and on_line_in):
                 return                               # other music, paused, or switched off: leave it alone
-            if time.monotonic() - self._last_try < RETRY_AFTER:
+            if player.state == MediaPlayerState.IDLE:
+                idle_for = (dt_util.utcnow() - player.last_changed).total_seconds()
+                if idle_for < IDLE_FOR:
+                    self._check_in(IDLE_FOR - idle_for + 1)
+                    return
+            if time.monotonic() - self._last_try < self._retry:
                 return
             self._last_try = time.monotonic()
             _LOGGER.info("Reconnecting the record: %s -> %s", self.source, self.listener)
@@ -94,6 +135,7 @@ class Router:
             await self._call(MP_DOMAIN, "join", self.player, group_members=[self.listener])
             return
 
+        self._retry = RETRY_AFTER                    # connected: the next drop is tried promptly again
         await self._set_monitor(others=[m for m in members if m not in (self.player, self.listener)])
 
     async def _set_monitor(self, others: list[str]) -> None:

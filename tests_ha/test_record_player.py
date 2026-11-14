@@ -134,3 +134,11 @@ async def test_a_renamed_listener_is_found_by_the_name_the_app_gives(hass, aiocl
     await hass.async_block_till_done()
     assert r["options"] == {"listener": ear}
     assert reg.async_get(ear).hidden_by is er.RegistryEntryHider.INTEGRATION
+
+
+async def test_the_cover_is_fetched_from_the_address_home_assistant_uses(hass, aioclient_mock):
+    await setup(hass, aioclient_mock, status(art_url="http://localhost:8780/api/albums/1/art?v=7"))
+    player = hass.data["entity_components"]["media_player"].get_entity(PLAYER) if "entity_components" in hass.data else None
+    from homeassistant.helpers import entity_component  # noqa: F401
+    ent = hass.data["domain_entities"]["media_player"][PLAYER] if player is None else player
+    assert ent.media_image_url == f"{URL}/api/albums/1/art?v=7"

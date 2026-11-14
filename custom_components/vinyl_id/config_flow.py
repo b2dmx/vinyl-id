@@ -97,7 +97,9 @@ class VinylConfigFlow(ConfigFlow, domain=DOMAIN):
             except (aiohttp.ClientError, TimeoutError, ValueError):
                 errors["base"] = "cannot_connect"
             else:
-                return self.async_update_reload_and_abort(entry, data_updates={CONF_URL: url})
+                # the entry's update listener reloads it
+                self.hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_URL: url})
+                return self.async_abort(reason="reconfigure_successful")
         schema = vol.Schema({vol.Required(CONF_URL, default=entry.data[CONF_URL]): str})
         return self.async_show_form(
             step_id="reconfigure", errors=errors,

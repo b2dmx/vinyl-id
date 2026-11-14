@@ -198,8 +198,10 @@ class TrackMixin:
         """Make a song this track. Returns the song id to use (the track's own, if it had one:
         the other song is then the same song a second time, and is folded into it)."""
         row = self.db.execute("SELECT song_id FROM tracks WHERE id=?", (track["id"],)).fetchone()
-        if row and row["song_id"] and row["song_id"] != song_id and self.song(row["song_id"]):
-            self._merge(song_id, row["song_id"])
+        if row and row["song_id"] and row["song_id"] != song_id and (own := self.song(row["song_id"])):
+            mine = self.song(song_id)
+            if mine and _same_artist(mine.artist, own.artist):   # same title by someone else stays its own song
+                self._merge(song_id, row["song_id"])
             return row["song_id"]
         was = self.db.execute("SELECT album_id FROM songs WHERE id=?", (song_id,)).fetchone()
         self.db.execute("UPDATE tracks SET song_id=NULL WHERE song_id=?", (song_id,))   # one track per song
@@ -307,6 +309,17 @@ class Library(TrackMixin):
     def full(self) -> bool:
         """The size limit is reached: nothing more is learned (covers and edits are still saved)."""
         return bool(self.max_bytes) and self.size_bytes() >= self.max_bytes
+
+    @locked
+    def can_learn(self, song_id: int) -> bool:
+        return not self.full and self.hash_count(song_id) < MAX_HASHES_PER_SONG
+
+    @locked
+    def set_song_album(self, song_id: int, album_id: int) -> None:
+        was = self.db.execute("SELECT album_id FROM songs WHERE id=?", (song_id,)).fetchone()
+        self.db.execute("UPDATE songs SET album_id=? WHERE id=?", (album_id, song_id))
+        self._gc_album(was and was["album_id"])
+        self.db.commit()
 
     @locked
     def hash_count(self, song_id: int) -> int:

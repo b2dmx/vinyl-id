@@ -264,3 +264,68 @@ def test_a_second_copy_of_a_track_is_folded_into_it(tmp_path):
     assert lib.song(dup) is None and lib.hash_count(own) == 2 and lib.shazam_song("shz1") == own
     assert [a["album"] for a in lib.albums()] == ["Test LP"] and lib.leftovers() == []
     assert not list(lib.art_dir.iterdir())
+
+
+LP = [{"id": 1, "side": "A", "pos": 1, "title": "One", "length": 60},
+      {"id": 2, "side": "A", "pos": 2, "title": "Two", "length": 60},
+      {"id": 3, "side": "A", "pos": 3, "title": "Three", "length": 60},
+      {"id": 4, "side": "B", "pos": 1, "title": "Four", "length": 60}]
+
+
+def test_a_gap_just_after_the_length_ran_out_is_the_same_change():
+    sp = Spin(1, [dict(t) for t in LP], 0)
+    sp.started(0.0)
+    assert sp.tick(64.0) and sp.i == 1               # the listed minute is over: on to track 2
+    assert sp.track_change(68.0) and sp.i == 1       # the real gap, 8 s late: still track 2, from now
+    assert sp.start == 68.0
+    assert sp.track_change(130.0) and sp.i == 2      # the next gap is a real change again
+
+
+def test_a_track_heard_past_its_length_waits_for_the_gap():
+    sp = Spin(1, [dict(t) for t in LP], 0, start=0.0)
+    sp.overrun = True                                # identification placed it 70 s into a 60 s track
+    assert not sp.tick(75.0) and sp.i == 0
+    assert sp.track_change(80.0) and sp.i == 1 and not sp.overrun
+
+
+def test_a_quick_flip_and_the_end_of_the_album():
+    sp = Spin(1, [dict(t) for t in LP], 2, start=0.0)            # last track of side A
+    assert not sp.track_change(50.0, dip=2.0)                    # an ordinary gap: nothing follows on this side
+    assert sp.track_change(90.0, dip=20.0) and sp.cur["side"] == "B"   # 20 s of quiet: turned over
+    sp.stopped(200.0)                                            # side B, the last one, played out
+    assert sp.started(230.0) == "resume"                         # an album you picked is kept
+    sp.auto = True
+    sp.stopped(300.0)
+    assert sp.started(330.0) == "expired"                        # a guessed one is let go
+
+
+def test_a_late_gap_before_a_short_jingle():
+    lp = [dict(t) for t in LP]
+    lp[1]["length"] = 10                                         # track 2 is a 10 s jingle
+    sp = Spin(1, lp, 0)
+    sp.started(0.0)
+    assert sp.tick(64.0) and sp.i == 1
+    assert sp.track_change(66.0) and sp.i == 1 and sp.start == 66.0     # track 1's own gap, 6 s late
+    assert sp.track_change(76.0) and sp.i == 2                           # the jingle's end
+
+
+def test_lost_sound_on_a_sides_last_track_is_not_a_flip():
+    sp = Spin(1, [dict(t) for t in LP], 2, start=0.0)
+    sp.stopped(50.0, side_end=False)
+    assert sp.started(60.0) == "resume" and sp.cur["side"] == "A"
+
+
+def test_the_start_time_does_not_drift_between_polls():
+    sp = Spin(1, [dict(t) for t in LP], 0, start=100.0)
+    a = sp.info(now=130.0, wall=1_000_000.0)["track_started_at"]
+    assert sp.info(now=131.0, wall=1_000_001.9)["track_started_at"] == a
+
+
+def test_same_title_by_someone_else_is_not_folded_into_the_track(tmp_path):
+    lib = Library(tmp_path)
+    album = lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks())
+    tr = lib.album_tracks(album)[0]
+    own = lib.song_for_track(tr["id"])
+    other, _ = lib.upsert("Song One", "Someone Else", "Their LP", "shz7")
+    assert lib.attach_song(other, tr) == own
+    assert lib.song(other) is not None and lib.shazam_song("shz7") == other

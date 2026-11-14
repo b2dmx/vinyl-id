@@ -72,7 +72,7 @@ function renderNow() {
     <h2 class="title">${esc(n.title)}</h2>
     <p class="sub">${esc([n.artist, n.album].filter(Boolean).join(" · "))}</p>
     ${n.track_length ? `<div><div class="meter" id="meter"><span style="width:0"></span></div>
-      <div class="times"><span id="t-now"></span><span>${mmss(n.track_length)}</span></div></div>` : ""}
+      <div class="times" aria-live="off"><span id="t-now"></span><span>${mmss(n.track_length)}</span></div></div>` : ""}
     <div class="row"><button class="btn tonal" id="nameit">${n.source === "unknown" ? "Name it" : "Not right?"}</button></div>
   </div></div>`;
   $("#nameit").onclick = () => nameDialog(n);
@@ -98,13 +98,14 @@ function nameDialog(n) {
     <label class="field"><span>Artist</span><input id="f-artist" value="${esc(n ? n.artist : "")}" autocomplete="off"></label>
     <label class="field"><span>Album</span><input id="f-album" value="${esc(n ? n.album : "")}" autocomplete="off"></label>`,
     `<button class="btn text" data-close>Cancel</button><button class="btn filled" id="save">Save</button>`);
-  $("#save").onclick = async () => {
+  $("#save").onclick = async (ev) => {
     const title = $("#f-title").value.trim(), artist = $("#f-artist").value.trim();
     if (!title || !artist) return toast("Song and artist are needed");
+    ev.currentTarget.disabled = true;          // a second press would save the song twice
     try {
       await post("now/label", { title, artist, album: $("#f-album").value.trim() });
       dlg.close(); refresh();
-    } catch (e) { fail(e); }
+    } catch (e) { fail(e); if ($("#save")) $("#save").disabled = false; }
   };
 }
 
@@ -351,16 +352,17 @@ function addAlbumDialog(forId = null, preset = "") {
   input.onkeydown = (e) => { if (e.key === "Enter") search(); };
   $("#manual").hidden = !!forId;
   $("#manual").onclick = () => {
-    const [artist, album] = input.value.split(/\s+[-–]\s+/);
-    if (!album) return toast("Type it as: Artist - Album");
-    post("albums", { artist: artist.trim(), album: album.trim() }).then(async (r) => { await loadAlbums(); albumDialog(r.id); }, fail);
+    const m = input.value.match(/^(.*?)\s+[-–]\s+(.*)$/);      // the album may itself contain " - "
+    const artist = m ? m[1].trim() : "", album = m ? m[2].trim() : "";
+    if (!artist || !album) return toast("Type it as: Artist - Album");
+    post("albums", { artist, album }).then(async (r) => { await loadAlbums(); albumDialog(r.id); }, fail);
   };
   input.focus();
 }
 
 // ---- wiring -------------------------------------------------------------------------------
 // what the Now Playing and Now spinning cards are drawn from
-const sig = (s) => JSON.stringify([s.now && [s.now.id, s.now.title, s.now.track_started_at, s.now.source, s.now.spin_mismatch], s.playing, s.unknown, !s.playing && s.level <= -88, s.spin && [s.spin.index, s.spin.album_id, s.spin.mismatch]]);
+const sig = (s) => JSON.stringify([s.now && [s.now.id, s.now.title, s.now.artist, s.now.album, s.now.art_url, s.now.track_length, s.now.track_started_at, s.now.source, s.now.spin_mismatch], s.playing, s.unknown, !s.playing && s.level <= -88, s.spin && [s.spin.index, s.spin.album_id, s.spin.album, s.spin.artist, s.spin.mismatch, (s.spin.tracks || []).map((t) => [t.title, t.length])]]);
 
 async function refresh() {
   try {
@@ -391,4 +393,9 @@ $("#add-album").onclick = () => addAlbumDialog();
 let qTimer;
 $("#q").oninput = (e) => { query = e.target.value.trim(); clearTimeout(qTimer); qTimer = setTimeout(loadAlbums, 200); };
 refresh(); loadAlbums(); loadLeftovers();
-setInterval(refresh, 3000);
+let polling = false;                         // a slow answer must not be overtaken by the next one
+setInterval(async () => {
+  if (polling) return;
+  polling = true;
+  try { await refresh(); } finally { polling = false; }
+}, 3000);

@@ -38,7 +38,7 @@ Vinyl ID listens to your record player and shows the song, artist, album and cov
 
 **1. The app**
 
-1. Add the repository with the button above, install **Vinyl ID** and start it. The default **Audio source**, Sendspin, is the tested one.
+1. Add the repository with the button above, install **Vinyl ID** and start it. The first install builds the app on your device, which takes several minutes. The default **Audio source**, Sendspin, is the tested one.
 2. In Music Assistant a new speaker appears: **Vinyl ID Listener** (or the name you gave it on the app's Configuration tab). It is silent. It is how the record reaches the app.
 
 **2. Send the record to the listener**
@@ -66,7 +66,7 @@ The song should appear within about 10 to 15 seconds on the page and on the **Re
 - **Stream:** if something already serves the turntable as an audio stream, choose Stream and enter its address (for example `http://192.168.1.50:8000/turntable.mp3`). Music Assistant is not needed.
 - **AirPlay:** Vinyl ID Listener appears as an AirPlay speaker instead. This path has not been tested on Home Assistant OS.
 
-**On a NAS or server instead of Home Assistant OS:** fill in `docker-compose.yml` (your MQTT broker and a login for it, and `PUBLIC_URL`), then run `docker compose up -d --build`. The library page is at `http://<that machine>:8780`, and that is also the address to give the integration. Anyone on your network can open the page and, unless you set `EDIT_FROM`, change your library.
+**On a NAS or server instead of Home Assistant OS:** download this repository (Code > Download ZIP, or `git clone`), fill in `docker-compose.yml` (your MQTT broker, a login for it, which you create in Home Assistant under Settings > People > Users, and `PUBLIC_URL`), then run `docker compose up -d --build`. The library page is at `http://<that machine>:8780`, and that is also the address to give the integration. Anyone on your network can open the page and, unless you set `EDIT_FROM`, change your library.
 
 ## Which entity is which
 
@@ -94,22 +94,28 @@ Open the Vinyl ID page.
 
 ## Tips
 
-- **Signal threshold** (on the app's Configuration tab): the level of your turntable when it is on but not playing. The bottom of the page shows the input level; use the number you see with the turntable on and the needle up. A record starts once the sound is 12 dB above it, and a gap between songs is sound that falls back to it.
+- **Signal threshold** (on the app's Configuration tab): the level of your turntable when it is on but not playing. The bottom of the page shows the input level; use the number you see with the turntable on and the needle up. A record starts once the sound is 12 dB above it, and a gap between songs is sound that falls back to it. Save and restart the app for a new threshold to apply.
 - **Learn my records** is on by default. Turn it off to always use Shazam.
-- The library can only be changed from the Vinyl ID page in Home Assistant. To let a script or another computer change it too, list its address under **Also allow edits from**.
+- The library can only be changed from the Vinyl ID page in Home Assistant. To let a script or another computer change it too, list its address under **Also allow edits from**. Anyone on your network can view the page and play the stream; only changes are restricted.
 - Covers you set are never replaced automatically.
 - `http://<home assistant>:8780/stream.mp3` is the record as a stream that names its songs, for a player that should show the title itself. It runs a few seconds behind the record.
 - Space: a cover is about 50-150 KB and a learned song about 0.2 MB, so 1,000 songs is roughly 250 MB. The page shows the current size. **Library size limit** stops learning at a size you choose; songs already learned keep working.
 - The app moved to another machine or port? Settings > Devices & services, open the **Vinyl ID** integration (not the Vinyl ID device under MQTT), then the three-dot menu > Reconfigure.
 
+## Updating and removing
+
+- **Update the app:** Settings > Apps > Vinyl ID > Update. **Update the integration:** HACS > Vinyl ID > Update, then restart Home Assistant.
+- **Your library** lives in the app's data. It is included in Home Assistant backups of the app, and uninstalling the app deletes it.
+- **To remove everything:** delete the Vinyl ID integration, remove it in HACS, uninstall the app, then delete the Vinyl ID device under MQTT.
+
 ## License
 
-The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/` and `custom_components/vinyl_id/brand/`, plus `app/icon.png`, `app/logo.png` and `app/vinyl_id/ui/logo.svg`) are © Goobis, all rights reserved. They are not covered by the MIT license, so please don't reuse them without permission.
+The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/` and `custom_components/vinyl_id/brand/`, plus `app/icon.png`, `app/logo.png` and `app/vinyl_id/ui/logo.svg`) are © Goobis, all rights reserved. They are not covered by the MIT license, so please don't reuse them without permission. The bundled Google Sans font is under the SIL Open Font License (`app/vinyl_id/ui/fonts/OFL.txt`).
 
 ---
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.8.3 by Goobis<br>
+  Vinyl ID v0.8.4 by Goobis<br>
   AI was used to help develop this application
 </p>
