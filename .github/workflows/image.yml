@@ -1,0 +1,48 @@
+name: Image
+
+# Builds the app's image for both kinds of machine and puts it on GitHub's registry, so
+# Home Assistant downloads it ready-made instead of building it on the user's device.
+# Runs for every published release (and by hand, for the version in app/config.yaml).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: aarch64
+            platform: linux/arm64
+          - arch: amd64
+            platform: linux/amd64
+    steps:
+      - uses: actions/checkout@v5
+      - id: version
+        run: echo "version=$(grep '^version:' app/config.yaml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: app
+          platforms: ${{ matrix.platform }}
+          push: true
+          provenance: false
+          tags: ghcr.io/${{ github.repository_owner }}/vinyl-id-${{ matrix.arch }}:${{ steps.version.outputs.version }}
+          labels: |
+            io.hass.version=${{ steps.version.outputs.version }}
+            io.hass.arch=${{ matrix.arch }}
+            io.hass.type=addon
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
