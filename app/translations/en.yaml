@@ -18,9 +18,10 @@ configuration:
   signal_threshold_db:
     name: Quiet level (signal threshold, dB)
     description: >-
-      The level of your turntable when it is on but no record is playing. You don't need to type
-      it: on the Vinyl ID page, with the turntable on and the needle up, press "Needle is up: use
-      this as the quiet level". A record starts once the sound is 12 dB above it.
+      The level of your turntable when it is on but no record is playing. Leave it at -50 and
+      Vinyl ID finds it by itself, about half a minute after it first hears the turntable with
+      the needle up; the button at the bottom of the Vinyl ID page sets it at once. A number
+      you type here is used as it is. A record starts once the sound is 12 dB above it.
   receiver_name:
     name: Listener name
     description: >-

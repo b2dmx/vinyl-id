@@ -21,7 +21,8 @@ import numpy as np
 
 from . import web
 from .audio import ffmpeg_blocks, level_db
-from .config import AI_NOTE, APP_NAME, BLOCK_SECONDS, SIGNATURE, Settings
+from .calibrate import Calibrator
+from .config import AI_NOTE, APP_NAME, BLOCK_SECONDS, DEFAULT_THRESHOLD_DB, SIGNATURE, Settings
 from .detector import Detector, Event
 from .fingerprint import FRAMES_PER_SECOND, hashes
 from .library import Library
@@ -43,8 +44,12 @@ class App:
         self.s = s
         self._threshold_option = s.signal_threshold_db   # as set in the options
         self._idle: deque[float] = deque(maxlen=int(5 / BLOCK_SECONDS))   # levels of the last 5 s with no record
+        self._quiet_set = False                          # a quiet level was found or set before
         self._load_quiet_level()
         s = self.s
+        # A quiet level you typed yourself is left alone; at the default it is found automatically.
+        self._auto_quiet = self._threshold_option == DEFAULT_THRESHOLD_DB
+        self.cal = Calibrator(s.signal_threshold_db, self._quiet_set)
         self.clock = time.monotonic           # swappable in tests
         self.loop: asyncio.AbstractEventLoop | None = None
         self.det = Detector(s)
@@ -92,6 +97,7 @@ class App:
             level = float(saved["signal_threshold_db"])
             if saved["option"] == self._threshold_option and -90 <= level <= -10:
                 self.s = dataclasses.replace(self.s, signal_threshold_db=level)
+                self._quiet_set = True
         except (OSError, ValueError, KeyError, TypeError):
             pass
 
@@ -103,14 +109,18 @@ class App:
         level = round(statistics.median(self._idle))
         if level <= -88 or level > -10:              # no sound is arriving at all, or far too loud to be quiet
             return None
+        self._set_quiet_level(level, "from the page")
+        return level
+
+    def _set_quiet_level(self, level: float, how: str) -> None:
         self.s = self.det.s = dataclasses.replace(self.s, signal_threshold_db=float(level))
+        self.cal.threshold, self.cal.calibrated, self._quiet_set = float(level), True, True
         try:
             self._settings_file.write_text(json.dumps(
                 {"signal_threshold_db": level, "option": self._threshold_option}))
         except OSError as exc:
             log.warning("Could not save the quiet level: %s", exc)
-        log.info("Quiet level set to %d dB from the page", level)
-        return level
+        log.info("Quiet level set to %d dB %s", level, how)
 
     # --- scheduling ------------------------------------------------------------
     def _schedule(self, delay: float, quick: bool = False) -> None:
@@ -214,6 +224,15 @@ class App:
                 self._idle.clear()
             else:
                 self._idle.append(db)
+            if self._auto_quiet:
+                found = self.cal.feed(db, self.det.playing, self.current is not None)
+                if found is not None:
+                    was_playing = self.det.playing
+                    self._set_quiet_level(found, "by itself")
+                    if was_playing and self.det.input_lost():     # it was hum all along, not a record
+                        log.info("That was the turntable's hum, not a record")
+                        self._record_stopped(lost=True)
+                        continue
             self._report_level(db)
             self.buf.append(block)
             if len(self.recent) == self.recent.maxlen:
@@ -624,6 +643,8 @@ class App:
                 "listener": self.s.receiver_name,
                 # for set-up: how loud the input is now, and how loud it must be for a record to start
                 "level": round(self.level), "start_level": round(self.det.start_level),
+                "quiet_level": round(self.s.signal_threshold_db), "quiet_auto": self._auto_quiet,
+                "quiet_set": self._quiet_set,
                 "library_mb": round(self.lib.size_bytes() / 1048576, 1),
                 "library_limit_mb": self.s.max_library_mb, "library_full": self.lib.full,
                 "shazam_ok": getattr(self.rec, "reachable", True)}

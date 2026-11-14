@@ -7,7 +7,7 @@ import socket
 from dataclasses import dataclass
 
 APP_NAME = "Vinyl ID"
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 SIGNATURE = f"{APP_NAME} v{VERSION} by Goobis"
 AI_NOTE = "AI was used to help develop this application"
 
@@ -32,6 +32,9 @@ def _s(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
+DEFAULT_THRESHOLD_DB = -50.0   # left at this, the quiet level is found automatically
+
+
 @dataclass(frozen=True)
 class Settings:
     # Audio input: anything ffmpeg can open (stream URL, ALSA device, file).
@@ -39,7 +42,7 @@ class Settings:
     audio_input_format: str = _s("AUDIO_INPUT_FORMAT")  # e.g. "alsa"; blank = auto
 
     # Signal detection (dBFS). The page shows the input level and sets the threshold with a button.
-    signal_threshold_db: float = _f("SIGNAL_THRESHOLD_DB", -50)
+    signal_threshold_db: float = _f("SIGNAL_THRESHOLD_DB", DEFAULT_THRESHOLD_DB)
     start_margin_db: float = _f("START_MARGIN_DB", 12)   # a record starts only with sound this far above the threshold
     start_seconds: float = _f("START_SECONDS", 2)        # sound this long = record started
     stop_seconds: float = _f("STOP_SECONDS", 45)         # quiet this long = record stopped (covers a side flip)

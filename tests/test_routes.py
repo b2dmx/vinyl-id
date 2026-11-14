@@ -175,6 +175,11 @@ def test_the_quiet_level_is_set_from_the_page(tmp_path, monkeypatch):
 
     serve(tmp_path, monkeypatch, check)
     again = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x"))
-    assert again.det.start_level == -49                                  # kept across a restart
+    assert again.det.start_level == -49 and again.cal.calibrated         # kept across a restart
+    assert again._auto_quiet and not changed_option(tmp_path)._auto_quiet
     changed = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x", signal_threshold_db=-40))
     assert changed.det.start_level == -28                                # until the option itself is changed
+
+
+def changed_option(tmp_path):
+    return main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x", signal_threshold_db=-40))

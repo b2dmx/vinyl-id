@@ -1,6 +1,6 @@
 services:
   vinyl-id:
-    build: ./app
+    image: ghcr.io/b2dmx/vinyl-id-amd64:latest   # on an ARM machine (Raspberry Pi, many NAS): vinyl-id-aarch64
     container_name: vinyl-id
     restart: unless-stopped
     network_mode: host
@@ -27,6 +27,6 @@ services:
       # Who may change the library (comma-separated IP addresses). Blank = anyone on your network.
       EDIT_FROM: ""
       # The level of your turntable when it is on but not playing. Easier: the button on the page.
-      SIGNAL_THRESHOLD_DB: -50
+      SIGNAL_THRESHOLD_DB: -50   # at -50 it is found automatically
       LEARN: "true"            # false = always ask Shazam
       MAX_LIBRARY_MB: 0        # stop learning at this size on disk; 0 = no limit

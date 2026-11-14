@@ -89,19 +89,29 @@ async def test_listener_is_hidden_and_shown_again(hass, aioclient_mock):
                                   original_name="Vinyl ID Listener").entity_id
     mine = reg.async_get_or_create("media_player", "music_assistant", "mine", suggested_object_id="hidden_by_me").entity_id
     reg.async_update_entity(mine, hidden_by=er.RegistryEntryHider.USER)
+    hass.states.async_set("media_player.cast", "idle", {"source_list": ["Queue", "Sendspin Source (CAST)"]})
 
     aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status())
     r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    r = await hass.config_entries.flow.async_configure(r["flow_id"], {CONF_URL: URL, "listener": ear})
+    r = await hass.config_entries.flow.async_configure(r["flow_id"], {CONF_URL: URL, "source_player": "media_player.cast"})
+    assert r["type"] is FlowResultType.FORM and r["step_id"] == "line_in"
+    suggested = {k.schema: (k.description or {}).get("suggested_value") for k in r["data_schema"].schema}
+    assert suggested["source_name"] == "Sendspin Source (CAST)" and suggested["listener"] == ear   # both found
+    r = await hass.config_entries.flow.async_configure(
+        r["flow_id"], {"source_name": "Sendspin Source (CAST)", "listener": ear, "advanced": {}})
     await hass.async_block_till_done()
     entry = r["result"]
+    assert r["options"] == {"source_player": "media_player.cast", "source_name": "Sendspin Source (CAST)", "listener": ear}
     assert reg.async_get(ear).hidden_by is er.RegistryEntryHider.INTEGRATION
 
     r = await hass.config_entries.options.async_init(entry.entry_id)
-    await hass.config_entries.options.async_configure(r["flow_id"], {"listener": mine})
+    r = await hass.config_entries.options.async_configure(r["flow_id"], {"source_player": "media_player.cast"})
+    await hass.config_entries.options.async_configure(
+        r["flow_id"], {"source_name": "Sendspin Source (CAST)", "listener": mine, "advanced": {"monitor": "select.x"}})
     await hass.async_block_till_done()
     assert reg.async_get(ear).hidden_by is None                                 # shown again
     assert reg.async_get(mine).hidden_by is er.RegistryEntryHider.USER          # your own choice is kept
+    assert entry.options["monitor"] == "select.x"
 
     assert await hass.config_entries.async_remove(entry.entry_id)
     await hass.async_block_till_done()
@@ -145,15 +155,17 @@ async def test_the_cover_is_fetched_from_the_address_home_assistant_uses(hass, a
 
 
 async def test_a_line_in_under_another_name_is_found_and_configure_guesses_again(hass, aioclient_mock):
-    from custom_components.vinyl_id.config_flow import _guess_listener
+    from custom_components.vinyl_id.config_flow import _guess_player, _line_in
 
     hass.states.async_set("media_player.tv", "on", {"source_list": ["HDMI 1", "Netflix"]})
     hass.states.async_set("media_player.streamer", "idle", {"source_list": ["Queue", "Line-In"]})
-    assert _guess_listener(hass) == {"source_player": "media_player.streamer", "source_name": "Line-In"}
+    assert _guess_player(hass) == "media_player.streamer" and _line_in(["Queue", "Line-In"]) == "Line-In"
     hass.states.async_set("media_player.cast", "idle", {"source_list": ["Sendspin Source (CAST)"]})
-    assert _guess_listener(hass)["source_player"] == "media_player.cast"      # the usual name wins
+    assert _guess_player(hass) == "media_player.cast"                         # the usual name wins
 
-    entry = await setup(hass, aioclient_mock, status())
+    entry = await setup(hass, aioclient_mock, status())                       # set up with no line-in player
     r = await hass.config_entries.options.async_init(entry.entry_id)
     suggested = {k.schema: (k.description or {}).get("suggested_value") for k in r["data_schema"].schema}
     assert suggested["source_player"] == "media_player.cast"
+    r = await hass.config_entries.options.async_configure(r["flow_id"], {})   # cleared again: nothing to look after
+    assert r["type"] is FlowResultType.CREATE_ENTRY and r["data"] == {}

@@ -364,7 +364,7 @@ function addAlbumDialog(forId = null, preset = "") {
 
 // ---- wiring -------------------------------------------------------------------------------
 // what the Now Playing and Now spinning cards are drawn from
-const sig = (s) => JSON.stringify({ ...s, level: 0, start_level: 0, library: 0, library_mb: 0, library_full: 0, quiet: !s.playing && s.level <= -88 });
+const sig = (s) => JSON.stringify({ ...s, level: 0, start_level: 0, quiet_level: 0, quiet_set: 0, library: 0, library_mb: 0, library_full: 0, quiet: !s.playing && s.level <= -88 });
 
 async function refresh() {
   try {
@@ -379,7 +379,7 @@ async function refresh() {
       $("#size").textContent = s.library_full
         ? `The library is full (${size} of ${s.library_limit_mb} MB): new songs are not learned. Forget songs you don't need, or raise the limit on the app's Configuration tab.`
         : `Library: ${s.library} ${s.library === 1 ? "song" : "songs"}, ${size} MB${s.library_limit_mb ? ` of ${s.library_limit_mb} MB` : ""}`;
-      if ($("#lvl")) $("#lvl").textContent = `Input level ${s.level} dB. A record starts at ${s.start_level} dB.`;
+      if ($("#lvl")) $("#lvl").textContent = `Input level ${s.level} dB. Quiet level ${s.quiet_level} dB${s.quiet_auto ? (s.quiet_set ? " (found by itself)" : " (not found yet: switch the turntable on, needle up)") : ""}. A record starts at ${s.start_level} dB.`;
       if ($("#quiet")) $("#quiet").hidden = s.playing;
       $("#size").classList.toggle("notice", !!s.library_full);
     }

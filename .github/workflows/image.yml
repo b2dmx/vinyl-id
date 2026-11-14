@@ -2,11 +2,13 @@ name: Image
 
 # Builds the app's image for both kinds of machine and puts it on GitHub's registry, so
 # Home Assistant downloads it ready-made instead of building it on the user's device.
-# Runs for every published release (and by hand, for the version in app/config.yaml).
+# Runs whenever the app changes on main (and by hand), for the version in app/config.yaml.
+# Home Assistant offers an update as soon as that version changes, so the image must follow at once.
 
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
+    paths: ["app/**"]
   workflow_dispatch:
 
 permissions:
@@ -40,7 +42,9 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           provenance: false
-          tags: ghcr.io/${{ github.repository_owner }}/vinyl-id-${{ matrix.arch }}:${{ steps.version.outputs.version }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/vinyl-id-${{ matrix.arch }}:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/vinyl-id-${{ matrix.arch }}:latest
           labels: |
             io.hass.version=${{ steps.version.outputs.version }}
             io.hass.arch=${{ matrix.arch }}
