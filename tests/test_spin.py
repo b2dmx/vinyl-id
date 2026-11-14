@@ -185,11 +185,11 @@ def test_song_from_another_album_asks_instead_of_learning(tmp_path, monkeypatch)
         assert app.start_spin(app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks()))
 
     app = _run(tmp_path, monkeypatch, side, other, before=pick)
-    assert any(i.get("spin_mismatch", {}) and i["spin_mismatch"]["title"] == "Something Else"
-               for i in app.pub.infos)
     assert app.spin is not None and app.spin.album_id == app.lib.albums("Test LP")[0]["id"]   # still following
-    stray = app.lib.db.execute("SELECT id FROM songs WHERE title='Something Else'").fetchone()
-    assert stray is None or app.lib.hash_count(stray[0]) == 0                                 # and never learned it
+    assert app.lib.db.execute("SELECT id FROM songs WHERE title='Something Else'").fetchone() is None
+    # 40 s of it against a track listed at a minute: it did not end where Song One should, so
+    # nothing of it was learned as Song One
+    assert app.lib.db.execute("SELECT COALESCE(SUM(hashes), 0) FROM songs").fetchone()[0] == 0
 
 
 def test_side_end_mark_is_used_once():
@@ -497,3 +497,43 @@ def test_an_old_record_does_not_look_fresh_after_a_later_save(tmp_path, monkeypa
     saved = _json.loads((tmp_path / "spin.json").read_text())["saved"]
     assert _time.time() - saved > 3 * 3600 - 5
     assert main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x")).spin is None      # too old to resume
+
+
+def test_the_place_is_sure_until_the_record_stops_and_again_when_a_track_ends_on_time():
+    sp = Spin(1, [dict(t) for t in LP], 0)
+    assert sp.sure and sp.started(0.0) == "new" and sp.sure          # you picked it, then dropped the needle
+    assert sp.track_change(61.0) and sp.sure                         # an ordinary gap: still sure
+    sp.stopped(130.0)
+    assert sp.started(200.0) == "resume" and not sp.sure             # it stopped: flipped? changed?
+    sp.start = 200.0
+    assert not sp.fits(215.0) and sp.fits(262.0)                     # a minute-long track ending after a minute
+
+
+def test_tracks_shazam_misnames_are_learned_by_their_place_on_the_album(tmp_path, monkeypatch):
+    silence = lambda s: np.zeros(SAMPLE_RATE * s, np.int16)       # noqa: E731
+    side = np.concatenate([fake_song(11, 60), silence(3), fake_song(12, 90), silence(50)])
+
+    async def other_names(self, pcm):
+        return Track("Some Other Name", "Somebody", "Elsewhere", "", "shz-x")      # for every track
+
+    app = _run(tmp_path, monkeypatch, side, other_names, before=lambda app: app.start_spin(
+        app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks()), "A", 1))
+    assert not any(i.get("spin_mismatch") for i in app.pub.infos)                 # no questions asked
+    ids = {t["title"]: t["song_id"] for t in app.lib.album_tracks(app.spin.album_id)}
+    assert app.lib.hash_count(ids["Song One"]) > 1000 and app.lib.hash_count(ids["Song Two (Remastered)"]) > 1000
+    assert [a["album"] for a in app.lib.albums()] == ["Test LP"] and app.lib.shazam_song("shz-x") is None
+
+
+def test_after_a_stop_nothing_is_learned_by_place_until_a_track_ends_on_time(tmp_path, monkeypatch):
+    silence = lambda s: np.zeros(SAMPLE_RATE * s, np.int16)       # noqa: E731
+    # Side A is played; then, after a minute of nothing, a different record whose first song runs 30 s
+    side = np.concatenate([fake_song(11, 60), silence(3), fake_song(12, 90), silence(60),
+                           fake_song(21, 30), silence(3), fake_song(22, 40), silence(50)])
+
+    async def never(self, pcm):
+        return None
+
+    app = _run(tmp_path, monkeypatch, side, never, before=lambda app: app.start_spin(
+        app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks()), "A", 1))
+    three = next(t for t in app.lib.album_tracks(app.spin.album_id) if t["title"] == "Song Three")
+    assert not three["song_id"] or app.lib.hash_count(three["song_id"]) == 0     # the stranger was not learned as B1

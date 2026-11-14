@@ -29,7 +29,7 @@ from .library import Library
 from .measure import TrackTimer
 from .mqtt import Publisher
 from .recognize import Recognizer
-from .spin import EXPIRE_AFTER, LENGTH_GRACE, Spin
+from .spin import EXPIRE_AFTER, LENGTH_GRACE, LONG_QUIET, Spin
 
 log = logging.getLogger("vinyl_id")
 FRAMES_PER_BLOCK = BLOCK_SECONDS * FRAMES_PER_SECOND
@@ -164,13 +164,22 @@ class App:
             self._counted = song_id
             self.lib.played(song_id)
 
-    def _commit_learning(self, trim_tail: bool = False, extra_trim: float = 0.0) -> None:
-        """Add confirmed audio to the current song's fingerprint."""
+    def _commit_learning(self, trim_tail: bool = False, extra_trim: float = 0.0,
+                         ended: float | None = None, confirmed: bool = False) -> None:
+        """Add confirmed audio to the current song's fingerprint.
+        ended: when the song stopped (a gap, or the record stopping). confirmed: recognition
+        has just named this very song."""
         cut = (TAIL_TRIM_BLOCKS if trim_tail else 0) + int(extra_trim / BLOCK_SECONDS)
         cut = max(0, cut - self._unkept)     # what was not kept is already "trimmed"
         blocks = self.learn_blocks[:-cut] if cut else self.learn_blocks
         # A track guessed from the album is not learned once something else has been heard on it
         doubted = self.spin is not None and (self.spin.mismatch is not None or self.spin.guessed)
+        # A track known only by its place on the album (nothing recognized it) is learned when that
+        # place is sure. If Shazam had another name for it, it must also have ended where its length
+        # says it should: that tells "the same track under another name" from "another record".
+        if self.current_source == "spin" and self.spin is not None and not confirmed:
+            fits = ended is not None and self.spin.fits(ended)
+            doubted = doubted or not self.spin.sure or (self.spin.named_otherwise and not fits)
         # Picked up mid-song (a resume, or an album chosen while it plays): where the song began is
         # not known, and audio stored from a made-up start would give wrong positions later.
         unplaced = self.spin is not None and self.spin.start is None and not self.start_exact
@@ -182,7 +191,8 @@ class App:
     def _record_stopped(self, lost: bool = False) -> None:
         """lost: the audio input went away (the record itself may still be turning)."""
         # A stop is heard only after stop_seconds of quiet: that stretch is the run-out groove, not the song
-        self._commit_learning(trim_tail=True, extra_trim=0.0 if lost else self.s.stop_seconds)
+        self._commit_learning(trim_tail=True, extra_trim=0.0 if lost else self.s.stop_seconds,
+                              ended=self.clock() - (0.0 if lost else self.s.stop_seconds))
         self.next_check, self.current, self.unknown = None, None, False
         if not lost:
             self._counted = None
@@ -268,15 +278,24 @@ class App:
             elif ev is Event.TRACK_CHANGE and self.spin and (early := self.spin.early_gap(self.clock())):
                 # the title stays; but listen again, in case the record really is somewhere else
                 log.info("Quiet passage, not a gap: this track should run another %d s", early)
+                if self.det.last_dip >= LONG_QUIET:
+                    self.spin.sure = False       # long enough to have changed the record
                 self._schedule(self.s.settle_seconds, quick=True)
             elif ev is Event.TRACK_CHANGE:
                 log.info("Track change detected")
                 if self.spin and self.spin.flip_held(self.clock()):
                     self.spin.guessed = False    # so what was heard of it may be learned
+                if self.spin and not self.spin.sure and not self.spin.guessed and self.spin.fits(self.clock()):
+                    log.info("%s%s ended on time: the place on the record is sure again",
+                             self.spin.cur["side"], self.spin.cur["pos"])
+                    self.spin.sure = True
                 if self.spin and self.spin.late_gap(self.clock()):
                     self._reset_learning()       # heard since the track moved on: the previous song's tail
                 else:                            # the quiet of the gap itself is not part of the song
-                    self._commit_learning(trim_tail=True, extra_trim=max(0.0, self.det.last_dip - 3))
+                    self._commit_learning(trim_tail=True, extra_trim=max(0.0, self.det.last_dip - 3),
+                                          ended=self.clock())
+                if self.spin and self.det.last_dip >= LONG_QUIET:
+                    self.spin.sure = False       # long enough to have turned or changed the record
                 self._clear_recent()
                 self._mark_start()
                 moved = False
@@ -359,7 +378,8 @@ class App:
                         song_id = self.lib.song_for_track(tr["id"])
                         self.lib.tag_shazam(song_id, track.shazam_id, track.artist)
                     elif self.spin and not self._foreign(track):
-                        self._schedule(self.s.retry_seconds)        # not on this album: ask, save nothing
+                        # not on this album: save nothing; ask again soon only while in doubt
+                        self._schedule(self.s.recheck_seconds if self.spin.sure else self.s.retry_seconds)
                         return
                 if song_id is None:
                     song_id, needs_art = self.lib.upsert(track.title, track.artist, track.album, track.shazam_id)
@@ -377,13 +397,14 @@ class App:
                 return
             song_id = self._reconcile(song_id)
             if song_id is None:                               # not on the album being spun: ask, don't learn
-                self._schedule(self.s.retry_seconds)          # soon: twice in a row lets a guessed album go
+                sure = self.spin is not None and self.spin.sure
+                self._schedule(self.s.recheck_seconds if sure else self.s.retry_seconds)   # soon while in doubt
                 return
 
             self._found_at = self.clock()
             if song_id == self.current:
                 moved = self._apply_position(pos, clip_start) if not self.start_exact else False
-                self._commit_learning()                       # confirmed: keep what we heard
+                self._commit_learning(confirmed=True)         # confirmed: keep what we heard
                 if moved:
                     self.refresh_now()
             else:
@@ -416,6 +437,9 @@ class App:
         if self.spin:
             tr = self.lib.track_in_album(self.spin.album_id, song_id)
             if tr is None:
+                if self._place_is_sure():
+                    self.spin.named_otherwise = True
+                    return None                 # the record has played on unbroken: it is still this album
                 seen = self.spin.mismatch
                 if self.spin.auto and not self.spin.trusted and seen and seen.get("id") == song_id:
                     # the album was only a guess, and the same other song was heard twice: let go
@@ -429,6 +453,7 @@ class App:
                     self.refresh_now()
                 return None
             self.spin.mismatch = None
+            self.spin.sure = True
             self.spin.seen.add(tr["id"])
             song_id = self.lib.attach_song(song_id, tr)
             j = next(i for i, t in enumerate(self.spin.tracks) if t["id"] == tr["id"])
@@ -450,10 +475,18 @@ class App:
             self._save_spin()
         return song_id
 
+    def _place_is_sure(self) -> bool:
+        """The album is not a mere guess, and the record has played on since its place was known:
+        a title from outside the album is then no reason to doubt where the record is."""
+        return self.spin.sure and (not self.spin.auto or self.spin.trusted)
+
     def _foreign(self, track) -> bool:
         """Shazam named a song that is neither on the album being followed nor in the library.
         Nothing is saved for it. True = the album was only a guess and this is the second time
         the same song was heard: stop following, and take the song."""
+        if self._place_is_sure():
+            self.spin.named_otherwise = True
+            return False                        # Shazam only knows this track by another name
         key = track.shazam_id or f"{track.title}|{track.artist}"
         seen = self.spin.mismatch
         if seen and seen.get("key") == key:
@@ -538,6 +571,7 @@ class App:
         # the next start resumes this track (position unknown); the time since counts as stopped time
         spin.stopped_at = self.clock() - max(0.0, time.time() - saved["saved"])
         spin.at_side_end = bool(saved.get("side_ended"))
+        spin.sure = False                  # the app was away: the record may have been changed
         return spin
 
     def start_spin(self, album_id: int, side: str = "", pos: int = 1) -> bool:
@@ -579,6 +613,7 @@ class App:
             self.lib.alias_shazam(self.lib.song_for_track(self.spin.cur["id"]), m["shazam_id"])
         log.info("Learned: %s is %s%s", m["title"], self.spin.cur["side"], self.spin.cur["pos"])
         self.spin.mismatch = None
+        self.spin.sure = True              # you said where the record is
         self.spin.seen.add(self.spin.cur["id"])
         self._spin_sync()
         return True

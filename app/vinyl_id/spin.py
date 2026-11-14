@@ -14,6 +14,7 @@ EXPIRE_AFTER = 1800.0        # stopped this long = the record is off the turntab
 LENGTH_GRACE = 3.0           # seconds past a track's listed length before moving on
 LATE_GAP = 15.0              # a gap this soon after moving on by length is that same song change
 END_WINDOW = 15.0            # a gap this close to a track's listed end (or within 8% of its length) is its end
+LONG_QUIET = 12.0            # quiet this long is more than a gap: the record may have been flipped or changed
 FLIP_GAP = 8.0               # quiet this long after a side's last track = the record was turned over
 
 
@@ -33,6 +34,12 @@ class Spin:
         self.same_until: float | None = None
         self.seen: set[int] = set()      # the tracks recognition has confirmed since this album was picked
         self.anchored = False            # `start` was heard (needle drop, or the gap before this track)
+        # The place on the record is known: you picked it, or a track was recognized, and the record
+        # has played on since with nothing longer than a gap between songs. Turning a record over or
+        # putting on another one always takes longer than that, so while this holds, the next track
+        # is the next track, whatever Shazam calls it.
+        self.sure = True
+        self.named_otherwise = False     # Shazam had another name for this track
         self.overrun = False             # the track was heard past its listed length: wait for the gap
         self.guessed = False             # on this track only because a long quiet looked like a flip
         self._wall: tuple[float | None, float] = (None, 0.0)   # (start, the same as wall-clock time)
@@ -62,7 +69,7 @@ class Spin:
         nxt = self.next_in_side()
         if nxt is not None and now - self.start >= self.cur["length"] + LENGTH_GRACE:
             self.start += self.cur["length"]
-            self.i, self.same_until, self.anchored = nxt, now + LATE_GAP, False
+            self.i, self.same_until, self.anchored, self.named_otherwise = nxt, now + LATE_GAP, False, False
             return True
         return False
 
@@ -88,6 +95,13 @@ class Spin:
         left = length - (now - self.start)
         return left if left > max(END_WINDOW, 0.08 * length) else 0.0
 
+    def fits(self, now: float) -> bool:
+        """This track ran about as long as its length says: it ended where it should."""
+        length = self.cur.get("length")
+        if self.start is None or not length:
+            return False
+        return abs((now - self.start) - length) <= max(END_WINDOW, 0.08 * length)
+
     def flip_held(self, now: float) -> bool:
         """A flip guessed from a long quiet: has this track now run about as long as it should?
         Then the guess was right (a quiet stretch inside a song would have ended it far too soon)."""
@@ -98,7 +112,7 @@ class Spin:
     def track_change(self, now: float, dip: float = 0.0) -> bool:
         """A gap between songs was heard (`dip` = how long it was quiet)."""
         late = self.late_gap(now)
-        self.overrun, self.guessed = False, False
+        self.overrun, self.guessed, self.named_otherwise = False, False, False
         if late:
             self.start, self.anchored = now, True
             return True
@@ -110,6 +124,7 @@ class Spin:
         if nxt is None and dip >= FLIP_GAP:
             nxt = self.first_of_next_side()      # turned over faster than a stop is noticed
             self.guessed = nxt is not None       # ... or a very quiet stretch in the side's last song
+            self.sure = self.sure and nxt is None
         if nxt is None:
             return False
         self.i, self.start, self.anchored = nxt, now, True
@@ -121,7 +136,8 @@ class Spin:
             self.start, self.anchored = now, True
             return "new"
         gone, self.stopped_at = now - self.stopped_at, None
-        self.same_until, self.overrun, self.guessed = None, False, False
+        self.same_until, self.overrun, self.guessed, self.named_otherwise = None, False, False, False
+        self.sure = False                        # it stopped: the same record, the other side, or another one
         if gone > EXPIRE_AFTER:
             return "expired"
         nxt = self.first_of_next_side()
@@ -141,7 +157,8 @@ class Spin:
 
     def jump(self, i: int, start: float | None) -> None:
         self.i, self.start, self.anchored = i, start, False
-        self.same_until, self.overrun, self.guessed = None, False, False
+        self.same_until, self.overrun, self.guessed, self.named_otherwise = None, False, False, False
+        self.sure = True                         # jumps come from recognizing a track
 
     # --- for display ---------------------------------------------------------------
     def info(self, now: float, wall: float) -> dict:
