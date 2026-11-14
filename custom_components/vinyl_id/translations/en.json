@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Vinyl ID",
-        "description": "Adds a Record Player that shows the song, cover and progress of the record the Vinyl ID app hears. Vinyl ID v0.8.4 by Goobis. AI was used to help develop this application.",
+        "description": "Adds a Record Player that shows the song, cover and progress of the record the Vinyl ID app hears. Vinyl ID v0.9.0 by Goobis. AI was used to help develop this application.",
         "data": {
           "url": "Address of the Vinyl ID app",
           "speaker": "Speaker that plays your record (optional)",

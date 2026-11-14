@@ -124,7 +124,7 @@ function renderSpin() {
     const head = t.side !== side ? `<div class="side-label">${t.disc > 1 || sp.tracks.some((x) => x.disc > 1) ? `LP ${t.disc} · ` : ""}Side ${esc(t.side)}</div>` : "";
     side = t.side;
     return `${head}<div class="trk ${i === sp.index ? "now-on" : ""}"><span>${esc(t.side)}${t.pos}</span>
-      <span>${esc(t.title)}</span><span class="len">${t.length ? mmss(t.length) : ""}</span>
+      <span>${esc(t.title)}</span><span class="len"${t.source === "listed" ? ' title="Listed length, not measured yet"' : ""}>${t.length ? (t.source === "listed" ? "~" : "") + mmss(t.length) : ""}</span>
       <button class="icon-btn" data-go="${esc(t.side)}|${t.pos}" aria-label="Start here">${icon(I.play)}</button></div>`;
   }).join("");
   el.innerHTML = `<div class="card" style="display:grid;gap:12px"><div class="section-head"><div><h3>Now spinning</h3>
@@ -172,7 +172,7 @@ async function albumDialog(id) {
     const head = t.side !== side ? `<div class="side-label">${multi ? `LP ${t.disc} · ` : ""}Side ${esc(t.side)}</div>` : "";
     side = t.side;
     return `${head}<div class="trk"><span>${esc(t.side)}${t.pos}</span><span>${esc(t.title)}</span>
-      <span class="len">${t.length ? mmss(t.length) : ""}</span>
+      <span class="len"${t.source === "listed" ? ' title="Listed length, not measured yet"' : ""}>${t.length ? (t.source === "listed" ? "~" : "") + mmss(t.length) : ""}</span>
       <button class="icon-btn" data-go="${esc(t.side)}|${t.pos}" aria-label="Spin from here">${icon(I.play)}</button></div>`;
   }).join("");
   dialog(a ? a.album : "Album", `
@@ -221,9 +221,9 @@ function lengthsDialog(id, tracks) {
     const head = t.side !== side ? `<div class="side-label">Side ${esc(t.side)}</div>` : "";
     side = t.side;
     return `${head}<div class="trk"><span>${esc(t.side)}${t.pos}</span><span>${esc(t.title)}</span>
-      <input class="len-in" data-i="${i}" value="${t.length ? mmss(t.length) : ""}" placeholder="m:ss" inputmode="numeric" aria-label="Length of ${esc(t.title)}"><span></span></div>`;
+      <input class="len-in" data-i="${i}" value="${t.length ? mmss(t.length) : ""}" placeholder="m:ss" inputmode="numeric" aria-label="Length of ${esc(t.title)}"><span class="len-src">${{ measured: "Measured", typed: "Typed", listed: "Not measured" }[t.source] || ""}</span></div>`;
   }).join("");
-  dialog("Track lengths", `<p class="muted">Minutes and seconds, as printed on the sleeve (for example 3:41). Leave a track empty if you don't know it.</p>
+  dialog("Track lengths", `<p class="muted">Vinyl ID measures each track as the record plays, and uses the listed length until then. To set one yourself, type it as minutes and seconds (for example 3:41). Empty a field to have that track measured again.</p>
     <div class="list" style="gap:2px">${rows}</div>`,
     `<button class="btn text" id="back">Back</button><button class="btn filled" id="save">Save</button>`);
   $("#back").onclick = () => albumDialog(id);
@@ -232,9 +232,9 @@ function lengthsDialog(id, tracks) {
     let bad = "";
     dlg.querySelectorAll(".len-in").forEach((inp) => {
       const t = tracks[Number(inp.dataset.i)], v = inp.value.trim();
-      if (!v || v === (t.length ? mmss(t.length) : "")) return;
-      if (!/^\d{1,2}:[0-5]\d$/.test(v)) { bad = `${t.side}${t.pos}`; return; }
-      lengths[`${t.side}|${t.pos}`] = v;
+      if (v === (t.length ? mmss(t.length) : "")) return;
+      if (v && !/^\d{1,2}:[0-5]\d$/.test(v)) { bad = `${t.side}${t.pos}`; return; }
+      lengths[`${t.side}|${t.pos}`] = v || null;
     });
     if (bad) return toast(`${bad}: write the length as minutes:seconds, like 3:41`);
     if (!Object.keys(lengths).length) return albumDialog(id);
@@ -362,7 +362,7 @@ function addAlbumDialog(forId = null, preset = "") {
 
 // ---- wiring -------------------------------------------------------------------------------
 // what the Now Playing and Now spinning cards are drawn from
-const sig = (s) => JSON.stringify([s.now && [s.now.id, s.now.title, s.now.artist, s.now.album, s.now.art_url, s.now.track_length, s.now.track_started_at, s.now.source, s.now.spin_mismatch], s.playing, s.unknown, !s.playing && s.level <= -88, s.spin && [s.spin.index, s.spin.album_id, s.spin.album, s.spin.artist, s.spin.mismatch, (s.spin.tracks || []).map((t) => [t.title, t.length])]]);
+const sig = (s) => JSON.stringify([s.now && [s.now.id, s.now.title, s.now.artist, s.now.album, s.now.art_url, s.now.track_length, s.now.track_started_at, s.now.source, s.now.spin_mismatch], s.playing, s.unknown, !s.playing && s.level <= -88, s.spin && [s.spin.index, s.spin.album_id, s.spin.album, s.spin.artist, s.spin.mismatch, (s.spin.tracks || []).map((t) => [t.title, t.length, t.source])]]);
 
 async function refresh() {
   try {

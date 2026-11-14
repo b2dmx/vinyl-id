@@ -234,13 +234,19 @@ def build(app: App) -> web.Application:
 
     @routes.patch("/api/albums/{id:\\d+}/tracks")
     async def set_track_lengths(req):
-        """Track lengths, for releases MusicBrainz lists without them:
-        {"lengths": {"A1": "2:01", "A2": 41, ...}} (m:ss or seconds)."""
+        """Track lengths you set yourself: {"lengths": {"A1": "2:01", "A2": 41, "A3": null}}
+        (m:ss or seconds; null takes yours away and has the track measured again).
+        With "placeholder": true they are listed lengths instead: stand-ins that the app
+        replaces with what it measures when the record plays."""
         try:
-            lengths = {str(k): _seconds(v) for k, v in (await req.json())["lengths"].items()}
+            body = await req.json()
+            lengths = {str(k): None if v is None else _seconds(v) for k, v in body["lengths"].items()}
+            placeholder = body.get("placeholder") is True
+            if placeholder and None in lengths.values():
+                raise ValueError
         except (KeyError, AttributeError, ValueError, TypeError):
             raise web.HTTPBadRequest(text='Send {"lengths": {"A1": "2:01", ...}}') from None
-        unknown = lib.set_track_lengths(int(req.match_info["id"]), lengths)
+        unknown = lib.set_track_lengths(int(req.match_info["id"]), lengths, placeholder)
         app.tracks_changed(int(req.match_info["id"]))
         app.refresh_now()
         return web.json_response({"set": len(lengths) - len(unknown), "not_on_album": unknown})

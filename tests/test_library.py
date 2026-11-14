@@ -222,3 +222,36 @@ def test_shazam_id_is_not_tied_to_a_track_by_someone_else(tmp_path):
     assert lib.shazam_song("other-home") is None
     lib.tag_shazam(own, "their-home", "Band")
     assert lib.shazam_song("their-home") == own
+
+
+def test_measured_lengths_and_what_replaces_what(tmp_path):
+    from vinyl_id.library import Q_GAP, Q_HEARD, Q_STOP
+
+    lib = Library(tmp_path)
+    tracks = [{"n": 1, "side": "A", "pos": 1, "title": "One", "length": 100},
+              {"n": 2, "side": "A", "pos": 2, "title": "Two"}]
+    album = lib.add_album_from_release("Band", "LP", "mb", tracks)
+    one, two = (t["id"] for t in lib.album_tracks(album))
+    assert [t["source"] for t in lib.album_tracks(album)] == ["listed", None]
+
+    assert not lib.set_measured(one, 20, Q_GAP)              # a fifth of the listed length: a false gap
+    assert not lib.set_measured(one, 170, Q_GAP)             # far longer: two songs taken for one
+    assert lib.set_measured(one, 92.04, Q_HEARD)
+    assert not lib.set_measured(one, 80, Q_HEARD)            # no surer than what is there
+    assert not lib.set_measured(one, 80, Q_STOP)
+    assert lib.set_measured(one, 91, Q_GAP)                  # surer: replaces it
+    assert lib.set_measured(two, 40, Q_STOP) and lib.set_measured(two, 55, Q_STOP)   # of two stops, the longer
+    assert not lib.set_measured(two, 50, Q_STOP) and not lib.set_measured(two, 2, Q_GAP)
+    got = lib.album_tracks(album)
+    assert [(t["length"], t["listed"], t["source"]) for t in got] == [(91, 100, "measured"), (55, None, "measured")]
+
+    lib.set_track_lengths(album, {"A1": 95})                 # typed by you: wins, and stays
+    assert not lib.set_measured(one, 90, Q_GAP) or lib.album_tracks(album)[0]["length"] == 95
+    assert lib.album_tracks(album)[0]["source"] == "typed"
+    lib.set_track_lengths(album, {"A1": None})               # taken away: measured afresh
+    assert (lib.album_tracks(album)[0]["length"], lib.album_tracks(album)[0]["source"]) == (100, "listed")
+    lib.set_track_lengths(album, {"A2": 60}, placeholder=True)
+    assert (lib.album_tracks(album)[1]["length"], lib.album_tracks(album)[1]["listed"]) == (55, 60)
+
+    lib.add_tracks(album, "mb", tracks)                      # the track list fetched again: measurements stay
+    assert lib.album_tracks(album)[1]["length"] == 55

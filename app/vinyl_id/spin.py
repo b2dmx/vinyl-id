@@ -118,6 +118,7 @@ class Spin:
         return {
             "side": t["side"], "track_number": t["pos"], "side_tracks": side_total,
             "album_tracks": len(self.tracks), "track_length": t.get("length"),
+            "length_source": t.get("source"),      # typed, measured, or listed (a placeholder)
             "track_started_at": self._started_wall(now, wall),
         }
 

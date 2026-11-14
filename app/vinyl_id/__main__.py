@@ -22,7 +22,7 @@ from .audio import ffmpeg_blocks, level_db
 from .config import AI_NOTE, APP_NAME, BLOCK_SECONDS, SIGNATURE, Settings
 from .detector import Detector, Event
 from .fingerprint import FRAMES_PER_SECOND, hashes
-from .library import Library
+from .library import Q_GAP, Q_HEARD, Q_STOP, Library
 from .mqtt import Publisher
 from .recognize import Recognizer
 from .spin import EXPIRE_AFTER, LENGTH_GRACE, Spin
@@ -68,6 +68,10 @@ class App:
         self.rejected: int | None = None       # the song you said this is not (until the next song)
         self._compact_due = False              # songs were forgotten while a record played: tidy up after it
         self._labelled_at = -1e9               # when a song was last named by hand
+        # Measuring track lengths from playback. Each is (track id, when it began, how sure that is).
+        self._m_open: tuple | None = None      # the track being timed
+        self._m_wait: tuple | None = None      # the one before it, whose end has not been heard yet
+        self._m_cand: tuple | None = None      # (track id, seconds, how sure): measured at a gap, not yet confirmed
 
     # --- scheduling ------------------------------------------------------------
     def _schedule(self, delay: float, quick: bool = False) -> None:
@@ -124,6 +128,7 @@ class App:
         self.next_check, self.current, self.unknown = None, None, False
         self.epoch += 1
         if self.spin:
+            self._m_stopped(self.clock(), lost)
             self.spin.stopped(self.clock(), side_end=not lost)
             self._save_spin()
         self.pub.playing(False)
@@ -131,6 +136,74 @@ class App:
         if self._compact_due:
             self._compact_due = False
             self._bg(self.lib.compact)
+
+    # --- measuring track lengths -------------------------------------------------
+    # A length is the time from a track's start to the next track's start (to the start of the
+    # quiet, for a side's last track). Starts come from the needle drop, from gaps, and from
+    # recognizing a song at a known position; the last is how songs that run together are timed.
+    def _m_reset(self) -> None:
+        self._m_open = self._m_wait = self._m_cand = None
+
+    def _m_store(self, track_id: int, seconds: float, q: int) -> None:
+        if not self.lib.set_measured(track_id, seconds, q):
+            return
+        log.info("Measured track %s: %d:%02d", track_id, seconds // 60, seconds % 60)
+        for t in self.spin.tracks if self.spin else ():
+            if t["id"] == track_id and t.get("source") != "typed":
+                t["length"], t["measured"], t["source"] = round(seconds, 1), round(seconds, 1), "measured"
+
+    def _m_settle(self, confirmed: bool) -> None:
+        """A length measured at a gap is kept: fully trusted if the next song was then recognized
+        as the next track, less so if nothing could confirm that the gap was a real one."""
+        cand, self._m_cand = self._m_cand, None
+        if cand:
+            self._m_store(cand[0], cand[1], cand[2] if confirmed else min(cand[2], Q_HEARD))
+
+    def _m_gap(self, now: float, dip: float, late: bool, moved: bool, was: int) -> None:
+        """A gap was heard. `was`: the track index before it; `late`: the listed length had
+        already moved the album on, so the gap ends the track before that one."""
+        sp = self.spin
+        self._m_settle(False)
+        src = self._m_wait if late else self._m_open
+        done = sp.tracks[was - 1] if late and was > 0 else sp.tracks[was]
+        self._m_wait = self._m_open = None
+        if not moved:
+            return
+        if src and src[0] == done["id"]:
+            end = now - dip if sp.cur["side"] != done["side"] else now     # a flip: up to where the quiet began
+            self._m_cand = (done["id"], end - src[1], min(src[2], Q_GAP))
+        self._m_open = (sp.cur["id"], now, Q_GAP)
+
+    def _m_moved_on(self) -> None:
+        """The listed length ran out and the album moved on with no gap heard."""
+        self._m_settle(False)
+        self._m_wait, self._m_open = self._m_open, None
+
+    def _m_jumped(self, i: int, j: int) -> None:
+        """Recognition says the album is on another track than thought (i -> j)."""
+        sp, self._m_cand = self.spin, None       # a gap measured just before this was not what it seemed
+        follows = j == i + 1 and sp.tracks[j]["side"] == sp.tracks[i]["side"]
+        if follows and self._m_open and self._m_open[0] == sp.tracks[i]["id"]:
+            self._m_wait, self._m_open = self._m_open, None    # ran into the next song with no gap
+        else:
+            self._m_wait = self._m_open = None
+
+    def _m_heard(self, start: float) -> None:
+        """The current track was recognized, and with it when it began."""
+        sp = self.spin
+        wait, self._m_wait = self._m_wait, None
+        before = sp.tracks[sp.i - 1] if sp.i > 0 else None
+        if wait and before and wait[0] == before["id"] and before["side"] == sp.cur["side"]:
+            self._m_store(wait[0], start - wait[1], min(wait[2], Q_HEARD))
+        if not self._m_open or self._m_open[0] != sp.cur["id"]:
+            self._m_open = (sp.cur["id"], start, Q_HEARD)
+
+    def _m_stopped(self, now: float, lost: bool) -> None:
+        self._m_settle(False)
+        sp, timed = self.spin, self._m_open
+        if not lost and timed and timed[0] == sp.cur["id"] and sp.next_in_side() is None:
+            self._m_store(timed[0], now - self.s.stop_seconds - timed[1], min(timed[2], Q_STOP))
+        self._m_reset()
 
     # --- main loop ---------------------------------------------------------------
     async def run(self) -> None:
@@ -163,12 +236,16 @@ class App:
                 self._reset_learning()
                 self._clear_recent()
                 self._mark_start()
+                self._m_reset()
                 if self.spin:
-                    if self.spin.started(self.clock()) == "expired":
+                    how = self.spin.started(self.clock())
+                    if how == "expired":
                         self.spin = None
                         self._save_spin()
                     else:
                         self._spin_sync()
+                        if how in ("new", "flip"):       # a needle drop at the top of a side
+                            self._m_open = (self.spin.cur["id"], self.clock() - self.s.start_seconds, Q_GAP)
                 self._schedule(self.s.settle_seconds, quick=True)
             elif ev is Event.TRACK_CHANGE:
                 log.info("Track change detected")
@@ -178,9 +255,13 @@ class App:
                     self._commit_learning(trim_tail=True, extra_trim=max(0.0, self.det.last_dip - 3))
                 self._clear_recent()
                 self._mark_start()
+                moved = False
                 if self.spin:
                     self.spin.mismatch = None            # a new track is a new chance to match the album
-                if self.spin and self.spin.track_change(self.clock(), self.det.last_dip):
+                    late, was = self.spin.late_gap(self.clock()), self.spin.i
+                    moved = self.spin.track_change(self.clock(), self.det.last_dip)
+                    self._m_gap(self.clock(), self.det.last_dip, late, moved, was)
+                if moved:
                     self._spin_sync()
                 else:
                     # Not known what this is yet. It is not the previous song any more, so nothing
@@ -196,6 +277,7 @@ class App:
                 # (never in a quiet stretch: that is a gap, or the side has ended)
                 self._commit_learning(trim_tail=True, extra_trim=LENGTH_GRACE)
                 self._clear_recent()
+                self._m_moved_on()
                 self._spin_sync()
                 self.start_exact = False     # the new song's own position is still to be heard
                 self._schedule(self.s.settle_seconds, quick=True)
@@ -324,8 +406,11 @@ class App:
             song_id = self.lib.attach_song(song_id, tr)
             j = next(i for i, t in enumerate(self.spin.tracks) if t["id"] == tr["id"])
             if j != self.spin.i:
+                self._m_jumped(self.spin.i, j)
                 self.spin.jump(j, None)        # a different track of the same album: follow it
                 self._save_spin()
+            else:
+                self._m_settle(True)           # the gap before this song was a real one
             return song_id
         tr = self.lib.find_track(song.title, song.artist)
         if tr:                                  # auto-attach: tracklist and timer start by themselves
@@ -367,6 +452,7 @@ class App:
             # heard past its listed length: this pressing's track is longer, so wait for the gap
             length = self.spin.cur.get("length")
             self.spin.overrun = bool(length) and now_pos >= length
+            self._m_heard(self.spin.start)
             return old is None or abs(old - self.spin.start) > 2
         return False
 
@@ -421,6 +507,7 @@ class App:
         i = next((k for k, t in enumerate(tracks)
                   if t["side"].upper() == (side or tracks[0]["side"]).upper() and t["pos"] == pos), 0)
         self.spin = Spin(album_id, tracks, i)
+        self._m_reset()
         self._save_spin()
         if self.det.playing:                    # needle is already down: position unknown until the next gap
             self.spin.stopped_at = None
@@ -541,6 +628,8 @@ class App:
         if not self.spin or self.spin.album_id != album_id:
             return
         tracks, old = self.lib.album_tracks(album_id), self.spin.cur
+        if [t["id"] for t in tracks] != [t["id"] for t in self.spin.tracks]:
+            self._m_reset()                    # another track list: what was being timed is gone
         if not tracks:
             self.end_spin()
             return

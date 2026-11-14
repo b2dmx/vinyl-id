@@ -88,7 +88,7 @@ Open the Vinyl ID page.
 - **Now spinning:** choose an album and where the needle is, if Vinyl ID hasn't worked it out by itself.
 - **Not right?** on the playing song corrects it, and Vinyl ID learns the correction.
 - **Change cover**, or give each LP of a box set its own.
-- **Track lengths:** if MusicBrainz has none for your record, type them in from the sleeve. The progress bar needs them.
+- **Track lengths** are measured as your record plays: from gap to gap, or from one recognized song to the next where songs run together. Until a track has been measured, the listed length (from MusicBrainz, often the CD's) stands in, shown with a ~. You can type a length yourself; it is then never replaced.
 - **Learned songs:** rename a song, or forget one that was learned wrongly.
 - **Covers of removed albums** are kept for 30 days at the bottom of the page, where you can put one back on an album or delete it.
 
@@ -116,6 +116,6 @@ The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.8.4 by Goobis<br>
+  Vinyl ID v0.9.0 by Goobis<br>
   AI was used to help develop this application
 </p>

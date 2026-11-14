@@ -90,6 +90,14 @@ def test_track_lengths_and_lp_covers(tmp_path, monkeypatch):
         assert await r.json() == {"set": 2, "not_on_album": ["Z9"]}
         assert [t["length"] for t in await (await c.get(f"/api/albums/{album}/tracks")).json()] == [90, 90, 45]
         assert (await c.patch(f"/api/albums/{album}/tracks", json={"lengths": {"A1": "soon"}})).status == 400
+        r = await c.patch(f"/api/albums/{album}/tracks", json={"lengths": {"A1": "2:00"}, "placeholder": True})
+        assert (await r.json())["set"] == 1
+        one = (await (await c.get(f"/api/albums/{album}/tracks")).json())[0]
+        assert (one["length"], one["listed"], one["source"]) == (90, 120, "typed")      # yours still counts
+        await c.patch(f"/api/albums/{album}/tracks", json={"lengths": {"A1": None}})
+        one = (await (await c.get(f"/api/albums/{album}/tracks")).json())[0]
+        assert (one["length"], one["source"]) == (120, "listed")
+        await c.patch(f"/api/albums/{album}/tracks", json={"lengths": {"A1": "1:30"}})
         assert (await c.patch(f"/api/albums/{album}/tracks", json=["A1"])).status == 400
 
         assert (await c.post(f"/api/albums/{album}/discs/1/art", json=PIC)).status == 200

@@ -329,3 +329,58 @@ def test_same_title_by_someone_else_is_not_folded_into_the_track(tmp_path):
     other, _ = lib.upsert("Song One", "Someone Else", "Their LP", "shz7")
     assert lib.attach_song(other, tr) == own
     assert lib.song(other) is not None and lib.shazam_song("shz7") == other
+
+
+def _measured(app):
+    return {t["title"]: (t["length"], t["source"]) for t in app.lib.album_tracks(app.lib.albums("Test LP")[0]["id"])}
+
+
+def test_track_lengths_are_measured_from_the_gaps(tmp_path, monkeypatch):
+    silence = lambda s: np.zeros(SAMPLE_RATE * s, np.int16)       # noqa: E731
+    # listed: 60 s and 90 s. On this pressing: 50 s and 70 s.
+    side = np.concatenate([fake_song(11, 50), silence(3), fake_song(12, 70), silence(50)])
+
+    async def never(self, pcm):
+        return None
+
+    app = _run(tmp_path, monkeypatch, side, never, before=lambda app: app.start_spin(
+        app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks()), "A", 1))
+    got = _measured(app)
+    assert abs(got["Song One"][0] - 53) <= 1.5 and got["Song One"][1] == "measured"       # start to next start
+    assert abs(got["Song Two (Remastered)"][0] - 70) <= 1.5                               # up to the quiet
+    assert got["Song Three"] == (120, "listed")                                           # not played: placeholder
+    q = dict(app.lib.db.execute("SELECT title, measured_q FROM tracks"))
+    assert q["Song One"] == 2 and q["Song Two (Remastered)"] == 1                         # nothing confirmed the gap
+
+
+def test_a_gap_confirmed_by_recognition_is_fully_trusted(tmp_path, monkeypatch):
+    silence = lambda s: np.zeros(SAMPLE_RATE * s, np.int16)       # noqa: E731
+    side = np.concatenate([fake_song(11, 50), silence(3), fake_song(12, 70), silence(50)])
+    heard = {"n": 0}
+
+    async def shazam(self, pcm):
+        heard["n"] += 1
+        return Track("Song One" if app_at["app"].spin.i == 0 else "Song Two", "The Band", "", "", f"s{app_at['app'].spin.i}")
+
+    app_at = {}
+
+    def pick(app):
+        app_at["app"] = app
+        app.start_spin(app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks()), "A", 1)
+
+    app = _run(tmp_path, monkeypatch, side, shazam, before=pick)
+    q = dict(app.lib.db.execute("SELECT title, measured_q FROM tracks"))
+    assert q["Song One"] == 3 and abs(_measured(app)["Song One"][0] - 53) <= 1.5
+
+
+def test_a_false_gap_is_not_measured(tmp_path, monkeypatch):
+    silence = lambda s: np.zeros(SAMPLE_RATE * s, np.int16)       # noqa: E731
+    # Song One (listed 60 s) has three seconds of silence in it after 10 s
+    side = np.concatenate([fake_song(11, 10), silence(3), fake_song(11, 45), silence(50)])
+
+    async def never(self, pcm):
+        return None
+
+    app = _run(tmp_path, monkeypatch, side, never, before=lambda app: app.start_spin(
+        app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks()), "A", 1))
+    assert _measured(app)["Song One"] == (60, "listed")           # 13 s against a listed minute: not believed

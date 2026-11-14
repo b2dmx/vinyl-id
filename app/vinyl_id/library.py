@@ -18,6 +18,19 @@ MIN_MATCH = 40          # aligned hashes needed to trust a local match
 MIN_RATIO = 2.0         # best match must beat the runner-up by this much
 LEFTOVER_DAYS = 30      # covers of removed albums are kept this long, then deleted
 
+# How sure a measured track length is. A better one replaces a worse one, never the other way.
+Q_STOP = 1              # ended when the record stopped (the needle may have been lifted early)
+Q_HEARD = 2             # a gap nothing confirmed, or a boundary placed by recognizing the song
+Q_GAP = 3               # from gap to gap, and the next song was recognized as the next track
+
+# A track as the app uses it. `length` is the one that counts: typed by you, else measured from
+# playback, else the listed one (from MusicBrainz or the sleeve), which is only a placeholder.
+TRACK_COLUMNS = (
+    "id, album_id, n, disc, side, pos, title, COALESCE(typed, measured, length) AS length, "
+    "length AS listed, measured, measured_q, song_id, "
+    "CASE WHEN typed IS NOT NULL THEN 'typed' WHEN measured IS NOT NULL THEN 'measured' "
+    "WHEN length IS NOT NULL THEN 'listed' END AS source")
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS albums (
   id INTEGER PRIMARY KEY, artist TEXT NOT NULL, album TEXT NOT NULL,
@@ -30,7 +43,7 @@ CREATE TABLE IF NOT EXISTS songs (
 CREATE TABLE IF NOT EXISTS tracks (
   id INTEGER PRIMARY KEY, album_id INTEGER NOT NULL, n INTEGER NOT NULL,
   disc INTEGER NOT NULL DEFAULT 1, side TEXT NOT NULL, pos INTEGER NOT NULL, title TEXT NOT NULL,
-  length REAL, song_id INTEGER);
+  length REAL, song_id INTEGER, measured REAL, measured_q INTEGER, typed REAL);
 CREATE INDEX IF NOT EXISTS tracks_album ON tracks (album_id, n);
 CREATE TABLE IF NOT EXISTS leftovers (
   id INTEGER PRIMARY KEY, file TEXT NOT NULL, artist TEXT NOT NULL, album TEXT NOT NULL,
@@ -114,26 +127,39 @@ class TrackMixin:
 
     @locked
     def add_tracks(self, album_id: int, mbid: str, tracks: list[dict]) -> None:
-        """Store (replace) an album's track list. Links to songs already learned are kept by title."""
-        old = {_norm(r["title"]): r["song_id"] for r in self.db.execute(
-            "SELECT title, song_id FROM tracks WHERE album_id=?", (album_id,)) if r["song_id"]}
+        """Store (replace) an album's track list. Links to songs already learned, and lengths
+        measured or typed, are kept by title."""
+        old = {_norm(r["title"]): r for r in self.db.execute(
+            "SELECT title, song_id, measured, measured_q, typed FROM tracks WHERE album_id=?", (album_id,))}
         self.db.execute("DELETE FROM tracks WHERE album_id=?", (album_id,))
         for t in tracks:
+            was = old.get(_norm(t["title"]))
             self.db.execute(
-                "INSERT INTO tracks (album_id, n, disc, side, pos, title, length, song_id) VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO tracks (album_id, n, disc, side, pos, title, length, song_id, measured, measured_q, typed) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (album_id, t["n"], t.get("disc", 1), t["side"], t["pos"], t["title"], t.get("length"),
-                 old.get(_norm(t["title"]))))
+                 *((was["song_id"], was["measured"], was["measured_q"], was["typed"]) if was else (None,) * 4)))
         self.db.execute("UPDATE albums SET mbid=? WHERE id=?", (mbid, album_id))
         self.db.commit()
 
     @locked
-    def set_track_lengths(self, album_id: int, lengths: dict[str, float]) -> list[str]:
-        """Lengths in seconds by track number ('A1', 'b10'). Returns the numbers not on the album."""
+    def set_track_lengths(self, album_id: int, lengths: dict[str, float | None],
+                          placeholder: bool = False) -> list[str]:
+        """Lengths in seconds by track number ('A1', 'b10'). Returns the numbers not on the album.
+        They count as typed by you and are never replaced by a measurement; None takes a typed
+        length away again and has the track measured afresh. placeholder=True sets the listed
+        length instead: a stand-in until the track has been measured."""
+        if placeholder:
+            what = "length=?"
+        else:
+            what = "typed=?, measured=CASE WHEN ?1 IS NULL THEN NULL ELSE measured END, " \
+                   "measured_q=CASE WHEN ?1 IS NULL THEN NULL ELSE measured_q END"
         unknown = []
         for key, secs in lengths.items():
             # "A1", or "side|position" for releases whose sides are numbers
             m = re.match(r"^\s*([^|]+?)\s*\|\s*(\d+)\s*$", key) or re.match(r"^\s*([A-Za-z]+)\s*(\d+)\s*$", key)
-            cur = self.db.execute("UPDATE tracks SET length=? WHERE album_id=? AND UPPER(side)=? AND pos=?",
+            cur = self.db.execute(f"UPDATE tracks SET {what.replace('=?', '=?1', 1)} "
+                                  "WHERE album_id=?2 AND UPPER(side)=?3 AND pos=?4",
                                   (secs, album_id, m.group(1).upper(), int(m.group(2)))) if m else None
             if cur is None or cur.rowcount == 0:
                 unknown.append(key)
@@ -141,10 +167,28 @@ class TrackMixin:
         return unknown
 
     @locked
+    def set_measured(self, track_id: int, seconds: float, q: int) -> bool:
+        """Keep a track length measured from playback. Returns whether it was kept: only when it
+        is plausible next to the listed length, and surer than the measurement already there."""
+        r = self.db.execute("SELECT length, measured, measured_q FROM tracks WHERE id=?", (track_id,)).fetchone()
+        if not r or seconds < 3:
+            return False
+        listed = r["length"]
+        if listed and not 0.3 * listed <= seconds <= 1.5 * listed + 5:
+            return False                  # a false gap in the middle, or two songs taken for one
+        if r["measured"] is not None:
+            had = r["measured_q"] or 0
+            # a stop can only cut a track short, so of two such measurements the longer is right
+            if q < had or (q == had and not (q == Q_STOP and seconds > r["measured"])):
+                return False
+        self.db.execute("UPDATE tracks SET measured=?, measured_q=? WHERE id=?", (round(seconds, 1), q, track_id))
+        self.db.commit()
+        return True
+
+    @locked
     def album_tracks(self, album_id: int) -> list[dict]:
         rows = self.db.execute(
-            "SELECT id, album_id, n, disc, side, pos, title, length, song_id FROM tracks "
-            "WHERE album_id=? ORDER BY n", (album_id,)).fetchall()
+            f"SELECT {TRACK_COLUMNS} FROM tracks WHERE album_id=? ORDER BY n", (album_id,)).fetchall()
         return [dict(r) for r in rows]
 
     @locked
@@ -185,8 +229,7 @@ class TrackMixin:
             "GROUP BY t.id ORDER BY lp DESC NULLS LAST").fetchall()
         r = _pick([r for r in rows if _same_artist(r["artist"], artist)], title)
         return dict(self.db.execute(
-            "SELECT id, album_id, n, disc, side, pos, title, length, song_id FROM tracks WHERE id=?",
-            (r["id"],)).fetchone()) if r else None
+            f"SELECT {TRACK_COLUMNS} FROM tracks WHERE id=?", (r["id"],)).fetchone()) if r else None
 
     @locked
     def title_in_album(self, album_id: int, title: str) -> dict | None:
@@ -264,6 +307,9 @@ class Library(TrackMixin):
             self.db.execute("ALTER TABLE albums ADD COLUMN mbid TEXT")
         if "disc" not in self._columns("tracks"):
             self.db.execute("ALTER TABLE tracks ADD COLUMN disc INTEGER NOT NULL DEFAULT 1")
+        for column, kind in (("measured", "REAL"), ("measured_q", "INTEGER"), ("typed", "REAL")):
+            if column not in self._columns("tracks"):    # lengths measured from playback, or typed by you
+                self.db.execute(f"ALTER TABLE tracks ADD COLUMN {column} {kind}")
         if "lp_covers" not in self._columns("albums"):   # box sets: show each LP's own cover
             self.db.execute("ALTER TABLE albums ADD COLUMN lp_covers INTEGER NOT NULL DEFAULT 1")
         if "hashes" not in self._columns("songs"):   # a kept count: counting the rows scans every song's hashes
