@@ -48,3 +48,19 @@ def test_the_version_is_the_same_everywhere():
     comp = root / "custom_components/vinyl_id"
     assert json.loads((comp / "manifest.json").read_text(encoding="utf-8"))["version"] == VERSION
     assert re.findall(r"Vinyl ID v([\d.]+\d) by Goobis", (comp / "translations/en.json").read_text(encoding="utf-8")) == [VERSION]
+
+
+def test_the_app_starts_without_an_mqtt_broker(tmp_path):
+    """The options script must not fail when the Supervisor has no MQTT service to offer."""
+    import os
+    import pathlib
+    import subprocess
+    import sys
+
+    options = tmp_path / "options.json"
+    options.write_text("{}")
+    script = pathlib.Path(__file__).parent.parent / "app/vinyl_id/ha_options.py"
+    env = {**os.environ, "OPTIONS_FILE": str(options), "SUPERVISOR_TOKEN": "x"}   # "supervisor" cannot be reached here
+    out = subprocess.run([sys.executable, str(script)], env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert "MQTT_HOST" not in out.stdout and "export RECEIVER_NAME='Vinyl ID Listener'" in out.stdout

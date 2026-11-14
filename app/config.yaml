@@ -1,5 +1,5 @@
 name: Vinyl ID
-version: "0.9.1"
+version: "0.10.0"
 slug: vinyl_id
 description: Shows what's playing on your record player, with its cover, in Home Assistant.
 url: https://github.com/b2dmx/vinyl-id
@@ -13,19 +13,16 @@ ingress_port: 8780          # not 8095: Music Assistant uses it on the same host
 panel_icon: mdi:album
 panel_title: Vinyl ID
 services:
-  - mqtt:need
+  - mqtt:want               # optional: adds six MQTT entities for automations and displays
 options:
   audio_source: sendspin
-  audio_input: ""
   learn: true
   signal_threshold_db: -50
-  receiver_name: Vinyl ID Listener
-  max_library_mb: 0
 schema:
   audio_source: list(sendspin|airplay|stream)
   audio_input: str?
   learn: bool
   signal_threshold_db: int(-90,-10)
-  receiver_name: str
+  receiver_name: str?
   edit_from: str?
   max_library_mb: int(0,)?

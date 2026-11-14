@@ -29,6 +29,7 @@ class Spin:
         self.mismatch: dict | None = None   # a song from outside this album was heard
         self.ticked_at: float | None = None  # when the listed length last moved it on
         self.overrun = False             # the track was heard past its listed length: wait for the gap
+        self.guessed = False             # on this track only because a long quiet looked like a flip
         self._wall: tuple[float | None, float] = (None, 0.0)   # (start, the same as wall-clock time)
 
     @property
@@ -67,16 +68,24 @@ class Spin:
             return False
         return now - self.start <= min(LATE_GAP, 0.9 * (self.cur.get("length") or LATE_GAP))
 
+    def flip_held(self, now: float) -> bool:
+        """A flip guessed from a long quiet: has this track now run about as long as it should?
+        Then the guess was right (a quiet stretch inside a song would have ended it far too soon)."""
+        length = self.cur.get("length")
+        return bool(self.guessed and self.start is not None and length
+                    and 0.5 * length <= now - self.start <= 1.5 * length + 5)
+
     def track_change(self, now: float, dip: float = 0.0) -> bool:
         """A gap between songs was heard (`dip` = how long it was quiet)."""
         late = self.late_gap(now)
-        self.ticked_at, self.overrun = None, False
+        self.ticked_at, self.overrun, self.guessed = None, False, False
         if late:
             self.start = now
             return True
         nxt = self.next_in_side()
         if nxt is None and dip >= FLIP_GAP:
             nxt = self.first_of_next_side()      # turned over faster than a stop is noticed
+            self.guessed = nxt is not None       # ... or a very quiet stretch in the side's last song
         if nxt is None:
             return False
         self.i, self.start = nxt, now
@@ -88,7 +97,7 @@ class Spin:
             self.start = now
             return "new"
         gone, self.stopped_at = now - self.stopped_at, None
-        self.ticked_at, self.overrun = None, False
+        self.ticked_at, self.overrun, self.guessed = None, False, False
         if gone > EXPIRE_AFTER:
             return "expired"
         nxt = self.first_of_next_side()
@@ -108,7 +117,7 @@ class Spin:
 
     def jump(self, i: int, start: float | None) -> None:
         self.i, self.start = i, start
-        self.ticked_at, self.overrun = None, False
+        self.ticked_at, self.overrun, self.guessed = None, False, False
 
     # --- for display ---------------------------------------------------------------
     def info(self, now: float, wall: float) -> dict:

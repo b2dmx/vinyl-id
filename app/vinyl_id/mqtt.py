@@ -20,6 +20,7 @@ class Publisher:
         self.t = s.base_topic
         self.on_forget = on_forget
         self._last: dict[str, tuple[str | bytes, bool]] = {}
+        self.on = bool(s.mqtt_host)          # without a broker everything here is a no-op
         self.c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="vinyl-id")
         if s.mqtt_user:
             self.c.username_pw_set(s.mqtt_user, s.mqtt_password)
@@ -28,10 +29,15 @@ class Publisher:
         self.c.on_message = self._on_message
 
     def start(self) -> None:
+        if not self.on:
+            log.info("No MQTT broker: the extra MQTT entities are off (the Vinyl ID integration shows the record)")
+            return
         self.c.connect_async(self.s.mqtt_host, self.s.mqtt_port)
         self.c.loop_start()
 
     def stop(self) -> None:
+        if not self.on:
+            return
         try:   # let "offline" leave before the connection closes
             self.c.publish(f"{self.t}/status", "offline", retain=True).wait_for_publish(2)
         except (RuntimeError, ValueError):   # never connected
@@ -95,7 +101,8 @@ class Publisher:
 
     def _put(self, topic: str, payload: str | bytes, retain: bool = True) -> None:
         self._last[topic] = (payload, retain)
-        self.c.publish(topic, payload, retain=retain)
+        if self.on:
+            self.c.publish(topic, payload, retain=retain)
 
     def _on_message(self, _c, _u, msg) -> None:
         if msg.topic == f"{self.t}/forget":

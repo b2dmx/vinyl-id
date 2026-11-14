@@ -384,3 +384,17 @@ def test_a_false_gap_is_not_measured(tmp_path, monkeypatch):
     app = _run(tmp_path, monkeypatch, side, never, before=lambda app: app.start_spin(
         app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks()), "A", 1))
     assert _measured(app)["Song One"] == (60, "listed")           # 13 s against a listed minute: not believed
+
+
+def test_a_flip_guessed_from_quiet_is_marked_until_something_confirms_it():
+    sp = Spin(1, [dict(t) for t in LP], 2, start=0.0)
+    assert sp.track_change(90.0, dip=20.0) and sp.cur["side"] == "B" and sp.guessed
+    sp.jump(3, 100.0)
+    assert not sp.guessed
+
+
+def test_a_guessed_flip_is_believed_when_the_track_ends_on_time():
+    sp = Spin(1, [dict(t) for t in LP], 2, start=0.0)
+    assert sp.track_change(90.0, dip=20.0) and sp.guessed            # side B, track "Four", listed 60 s
+    assert not sp.flip_held(100.0)                                   # 10 s in: could still be a quiet passage
+    assert sp.flip_held(150.0)                                       # a minute in: it really was side B

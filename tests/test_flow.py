@@ -186,3 +186,34 @@ def test_a_shazam_lookup_that_hangs_does_not_hold_up_the_next_one(tmp_path, monk
     app.busy = True
     asyncio.run(app._identify(np.zeros(SAMPLE_RATE * 12, np.int16), 0))
     assert not app.busy and app.unknown and app.next_check is not None
+
+
+def test_a_correction_is_remembered_the_next_time(tmp_path, monkeypatch):
+    async def wrong(self, pcm):
+        return Track("Wrong Song", "Artist", "LP", "", "shzW")
+
+    def label(app, n):
+        if n == int(30 / BLOCK_SECONDS):
+            app.label_now("Right Song", "Local Band", "")
+
+    app = _run(tmp_path, monkeypatch, wrong, on_block=label)
+    assert [r[0] for r in app.lib.db.execute("SELECT title FROM songs")] == ["Right Song"]
+    shown = [t for t in app.pub.tracks if t]
+    second_play = shown[len(shown) - 1 - shown[::-1].index(("Right Song", "manual")) + 1:]
+    assert second_play and all(t[0] == "Right Song" for t in second_play)      # the replay: not "Wrong Song" again
+    assert app.lib.db.execute("SELECT plays FROM songs").fetchone()[0] == 2    # one per play
+
+
+def test_a_correction_long_after_the_song_was_found_does_not_fold_it(tmp_path, monkeypatch):
+    calls = {"n": 0}
+
+    async def once(self, pcm):
+        calls["n"] += 1
+        return Track("Song X", "Artist", "LP", "", "shzX") if calls["n"] == 1 else None
+
+    def label(app, n):
+        if n == int(100 / BLOCK_SECONDS):            # the title has stood for a minute and a half
+            app.label_now("My Y", "Local Band", "")
+
+    app = _run(tmp_path, monkeypatch, once, on_block=label)
+    assert sorted(r[0] for r in app.lib.db.execute("SELECT title FROM songs")) == ["My Y", "Song X"]

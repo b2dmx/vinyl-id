@@ -254,6 +254,18 @@ class TrackMixin:
         self.db.commit()
         return song_id
 
+    @locked
+    def fold_into(self, wrong: int, right: int) -> bool:
+        """You said the song found as `wrong` is really `right`. If `wrong` only exists because
+        of this one play, it becomes `right`: what was learned and its Shazam id move over, so
+        the same sound is `right` from now on. A song with a history of its own is left alone."""
+        r = self.db.execute("SELECT plays FROM songs WHERE id=?", (wrong,)).fetchone()
+        linked = self.db.execute("SELECT 1 FROM tracks WHERE song_id=?", (wrong,)).fetchone()
+        if not r or r["plays"] > 1 or linked or wrong == right:
+            return False
+        self._merge(wrong, right)
+        return True
+
     def _merge(self, src: int, dst: int) -> None:
         """Fold song `src` into `dst`: what was learned, its Shazam id and its play count move over."""
         old = self.db.execute("SELECT shazam_id, plays, album_id FROM songs WHERE id=?", (src,)).fetchone()

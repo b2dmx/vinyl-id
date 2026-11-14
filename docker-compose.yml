@@ -14,18 +14,19 @@ services:
       AUDIO_SOURCE: sendspin
       RECEIVER_NAME: Vinyl ID Listener
       AUDIO_INPUT: ""          # only with AUDIO_SOURCE: stream, e.g. http://192.168.1.50:8000/turntable.mp3
-      # Your MQTT broker (in Home Assistant: the Mosquitto broker app). Create a login for Vinyl ID there.
-      MQTT_HOST: homeassistant.local
+      # Optional: your MQTT broker (in Home Assistant: the Mosquitto broker app, and a login made
+      # under Settings > People > Users). It adds six entities for automations and displays.
+      # Leave MQTT_HOST empty to do without; the Vinyl ID integration shows the record either way.
+      MQTT_HOST: ""
       MQTT_PORT: 1883
-      MQTT_USER: vinyl-id
-      MQTT_PASSWORD: change-me
-      # The library page, and the address Home Assistant fetches covers from.
-      # Not 8095: Music Assistant uses that port.
+      MQTT_USER: ""
+      MQTT_PASSWORD: ""
+      # The library page. Not 8095: Music Assistant uses that port.
       WEB_PORT: 8780
-      PUBLIC_URL: http://your-server.local:8780   # this machine's address, as Home Assistant sees it
+      # PUBLIC_URL: http://192.168.1.50:8780   # only if displays cannot reach the address Vinyl ID finds by itself
       # Who may change the library (comma-separated IP addresses). Blank = anyone on your network.
       EDIT_FROM: ""
-      # The level of your turntable when it is on but not playing (the page shows the input level)
+      # The level of your turntable when it is on but not playing. Easier: the button on the page.
       SIGNAL_THRESHOLD_DB: -50
       LEARN: "true"            # false = always ask Shazam
       MAX_LIBRARY_MB: 0        # stop learning at this size on disk; 0 = no limit

@@ -48,6 +48,12 @@ def cover_cache(req: web.Request) -> dict[str, str]:
 def build(app: App) -> web.Application:
     lib, routes = app.lib, web.RouteTableDef()
 
+    def named(body) -> tuple[str, str]:
+        artist, album = body["artist"].strip(), body["album"].strip()
+        if not artist or not album:
+            raise web.HTTPBadRequest(text="An album needs an artist and a name")
+        return artist, album
+
     def album_of(req) -> int:
         album_id = int(req.match_info["id"])
         if not lib.album(album_id):
@@ -59,6 +65,14 @@ def build(app: App) -> web.Application:
         """?tracks=0 leaves the album's track list out (for things that ask every few seconds)."""
         st = app.status(tracks=req.query.get("tracks") != "0")
         return web.json_response({**st, "signature": SIGNATURE, "ai_note": AI_NOTE})
+
+    @routes.post("/api/quiet-level")
+    async def quiet_level(_):
+        """The level heard now (turntable on, needle up) becomes the signal threshold."""
+        if app.use_quiet_level() is None:
+            raise web.HTTPConflict(text="Lift the needle and wait about a minute. If the input level "
+                                        "stays at -90, the record player is not reaching Vinyl ID yet.")
+        return web.json_response(app.status(tracks=False))
 
     @routes.get("/stream.mp3")
     async def stream(req):
@@ -79,7 +93,7 @@ def build(app: App) -> web.Application:
     @routes.post("/api/albums")
     async def add_album(req):
         b = await req.json()
-        return web.json_response({"id": lib.add_album(b["artist"].strip(), b["album"].strip())})
+        return web.json_response({"id": lib.add_album(*named(b))})
 
     @routes.post("/api/albums/{id:\\d+}/songs")
     async def add_song(req):
@@ -107,7 +121,7 @@ def build(app: App) -> web.Application:
     async def edit_album(req):
         body = await req.json()
         try:
-            lib.edit_album(int(req.match_info["id"]), body["artist"].strip(), body["album"].strip())
+            lib.edit_album(int(req.match_info["id"]), *named(body))
         except sqlite3.IntegrityError:
             raise web.HTTPConflict(text="You already have an album with that artist and name") from None
         app.refresh_now()
@@ -290,7 +304,7 @@ def build(app: App) -> web.Application:
     async def edits_guard(req, handler):
         """Covers stay readable on the LAN (for displays); changes only from allowed IPs."""
         if allowed and req.method not in ("GET", "HEAD") and req.remote not in allowed:
-            raise web.HTTPForbidden(text="This address may not change the library (see EDIT_FROM / Also allow edits from)")
+            raise web.HTTPForbidden(text="Changes only work from the Vinyl ID page inside Home Assistant (the sidebar, or Open Web UI on the app's page)")
         return await handler(req)
 
     @web.middleware

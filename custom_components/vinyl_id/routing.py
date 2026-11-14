@@ -55,6 +55,7 @@ class Router:
         self._busy = False
         self._again = False                      # something changed while a check was running
         self._later: CALLBACK_TYPE | None = None
+        self._monitor_failed = 0.0               # when switching direct/in-sync last failed
 
     @callback
     def start(self) -> list[CALLBACK_TYPE]:
@@ -145,9 +146,13 @@ class Router:
         if len(options) < 2:
             return
         want = options[1] if others else options[0]   # by convention: direct first, in-sync second
-        if select.state != want:
+        if select.state != want and time.monotonic() - self._monitor_failed >= RETRY_AFTER:
             _LOGGER.info("Line-in sound: %s (%d other speakers)", want, len(others))
-            await self._call("select", "select_option", self.monitor, **{ATTR_OPTION: want})
+            try:
+                await self._call("select", "select_option", self.monitor, **{ATTR_OPTION: want})
+            except (HomeAssistantError, TimeoutError) as err:     # the record itself is connected: no back-off
+                self._monitor_failed = time.monotonic()
+                _LOGGER.warning("Could not switch the line-in sound to %s: %s", want, str(err) or type(err).__name__)
 
     async def _call(self, domain: str, service: str, entity_id: str, **data) -> None:
         async with asyncio.timeout(30):              # a call that never answers must not stop later checks

@@ -6,19 +6,7 @@ Run by entrypoint.sh as:  eval "$(python ha_options.py)"
 import json
 import os
 import shlex
-import socket
 import urllib.request
-
-
-def lan_ip() -> str:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("192.0.2.1", 9))   # no packet is sent; just picks the LAN interface
-        return s.getsockname()[0]
-    except OSError:                   # no network yet: start anyway
-        return "127.0.0.1"
-    finally:
-        s.close()
 
 
 def mqtt_service() -> dict:
@@ -27,8 +15,11 @@ def mqtt_service() -> dict:
         return {}
     req = urllib.request.Request("http://supervisor/services/mqtt",
                                  headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.load(r).get("data", {})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.load(r).get("data", {})
+    except (OSError, ValueError):     # no broker installed (the Supervisor answers with an error): do without
+        return {}
 
 
 opts = json.load(open(os.environ.get("OPTIONS_FILE", "/data/options.json")))
@@ -37,10 +28,9 @@ env = {
     "AUDIO_INPUT": opts.get("audio_input") or "",
     "LEARN": str(opts.get("learn", True)).lower(),
     "SIGNAL_THRESHOLD_DB": str(opts.get("signal_threshold_db", -50)),
-    "RECEIVER_NAME": opts.get("receiver_name", "Vinyl ID Listener"),
+    "RECEIVER_NAME": opts.get("receiver_name") or "Vinyl ID Listener",
     "DATA_DIR": "/data",
     "WEB_PORT": "8780",
-    "PUBLIC_URL": f"http://{lan_ip()}:8780",
     "MAX_LIBRARY_MB": str(opts.get("max_library_mb") or 0),
     # edits only through the HA sidebar (ingress), plus any addresses you allow yourself
     "EDIT_FROM": ",".join(["172.30.32.2", "127.0.0.1", *(opts.get("edit_from") or "").replace(" ", "").split(",")]).strip(","),

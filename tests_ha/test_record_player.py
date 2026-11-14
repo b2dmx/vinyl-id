@@ -142,3 +142,18 @@ async def test_the_cover_is_fetched_from_the_address_home_assistant_uses(hass, a
     from homeassistant.helpers import entity_component  # noqa: F401
     ent = hass.data["domain_entities"]["media_player"][PLAYER] if player is None else player
     assert ent.media_image_url == f"{URL}/api/albums/1/art?v=7"
+
+
+async def test_a_line_in_under_another_name_is_found_and_configure_guesses_again(hass, aioclient_mock):
+    from custom_components.vinyl_id.config_flow import _guess_listener
+
+    hass.states.async_set("media_player.tv", "on", {"source_list": ["HDMI 1", "Netflix"]})
+    hass.states.async_set("media_player.streamer", "idle", {"source_list": ["Queue", "Line-In"]})
+    assert _guess_listener(hass) == {"source_player": "media_player.streamer", "source_name": "Line-In"}
+    hass.states.async_set("media_player.cast", "idle", {"source_list": ["Sendspin Source (CAST)"]})
+    assert _guess_listener(hass)["source_player"] == "media_player.cast"      # the usual name wins
+
+    entry = await setup(hass, aioclient_mock, status())
+    r = await hass.config_entries.options.async_init(entry.entry_id)
+    suggested = {k.schema: (k.description or {}).get("suggested_value") for k in r["data_schema"].schema}
+    assert suggested["source_player"] == "media_player.cast"

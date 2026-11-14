@@ -17,6 +17,7 @@ from shazamio import Shazam
 from .config import SAMPLE_RATE, VERSION
 
 log = logging.getLogger(__name__)
+MAX_IMAGE_BYTES = 10 * 1024 * 1024   # a cover larger than this is not downloaded
 _STOP = {"a", "an", "and", "the", "of", "in", "on", "to", "for", "at", "by", "is", "it"}   # MusicBrainz ignores these
 
 
@@ -85,6 +86,7 @@ def _wav(pcm: np.ndarray) -> bytes:
 class Recognizer:
     def __init__(self) -> None:
         self._shazam = Shazam()
+        self.reachable = True              # whether the last Shazam lookup got an answer at all
         self._http: aiohttp.ClientSession | None = None
         self._mb_lock = asyncio.Lock()
         self._mb_last = 0.0
@@ -99,7 +101,9 @@ class Recognizer:
             out = await self._shazam.recognize(_wav(pcm))
         except Exception as exc:  # network / API change
             log.warning("Shazam lookup failed: %s", exc)
+            self.reachable = False
             return None
+        self.reachable = True
         t = out.get("track")
         if not t:
             return None
@@ -129,9 +133,18 @@ class Recognizer:
         return self._http
 
     async def fetch(self, url: str) -> bytes | None:
+        """An image from the web, or None. Never more than MAX_IMAGE_BYTES."""
         try:
             async with self._session().get(url) as r:
-                return await r.read() if r.status == 200 else None
+                if r.status != 200:
+                    return None
+                data = bytearray()
+                async for chunk in r.content.iter_chunked(65536):
+                    data += chunk
+                    if len(data) > MAX_IMAGE_BYTES:
+                        log.warning("Art download stopped: larger than %d MB", MAX_IMAGE_BYTES >> 20)
+                        return None
+                return bytes(data)
         except Exception as exc:
             log.warning("Art download failed: %s", exc)
             return None

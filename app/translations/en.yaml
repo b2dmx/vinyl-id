@@ -3,8 +3,8 @@ configuration:
     name: Audio source
     description: >-
       How the record reaches Vinyl ID. Sendspin (recommended) or AirPlay: a silent speaker,
-      Vinyl ID Listener, appears in Music Assistant; group it onto the player that has your
-      turntable on its line-in. Stream: Vinyl ID reads the address below and Music Assistant is not needed.
+      Vinyl ID Listener, appears in Music Assistant, and the Vinyl ID integration connects
+      your record to it. Stream: Vinyl ID reads the address below and Music Assistant is not needed.
   audio_input:
     name: Stream address
     description: >-
@@ -16,11 +16,11 @@ configuration:
       Save a fingerprint of each song so replays are identified on this device,
       without the internet. Off: always ask Shazam. Covers and your edits are saved either way.
   signal_threshold_db:
-    name: Signal threshold (dB)
+    name: Quiet level (signal threshold, dB)
     description: >-
-      The level of your turntable when it is on but no record is playing. The bottom of the Vinyl ID
-      page shows the input level: use the number you see with the needle up. A record starts once
-      the sound is 12 dB above it.
+      The level of your turntable when it is on but no record is playing. You don't need to type
+      it: on the Vinyl ID page, with the turntable on and the needle up, press "Needle is up: use
+      this as the quiet level". A record starts once the sound is 12 dB above it.
   receiver_name:
     name: Listener name
     description: >-

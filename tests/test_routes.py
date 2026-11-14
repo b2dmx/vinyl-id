@@ -72,6 +72,8 @@ def test_albums_songs_and_covers(tmp_path, monkeypatch):
         other, _ = await new_album(c, album="Second LP")
         assert (await c.patch(f"/api/albums/{other}", json={"artist": "Band", "album": "lp"})).status == 409
         assert (await c.patch(f"/api/albums/{other}", json={"artist": "Band", "album": "Third LP"})).status == 200
+        assert (await c.patch(f"/api/albums/{other}", json={"artist": " ", "album": "Third LP"})).status == 400
+        assert (await c.post("/api/albums", json={"artist": "Band", "album": ""})).status == 400
 
         assert (await c.post(f"/api/albums/{album}/discs/2/art", json=PIC)).status == 404      # no such LP
         assert (await c.post("/api/albums/999/art", json=PIC)).status == 404                   # no such album
@@ -160,3 +162,19 @@ def test_record_stream_names_its_song(tmp_path, monkeypatch):
         assert (await c.get("/stream.mp3")).status == 503
 
     serve(tmp_path, monkeypatch, check)
+
+
+def test_the_quiet_level_is_set_from_the_page(tmp_path, monkeypatch):
+    async def check(app, c):
+        assert (await c.post("/api/quiet-level")).status == 409          # nothing heard yet
+        app._idle.extend([-61.2] * app._idle.maxlen)
+        st = await (await c.post("/api/quiet-level")).json()
+        assert st["start_level"] == -49 and app.det.start_level == -49   # -61 + 12, at once
+        app.det.playing = True
+        assert (await c.post("/api/quiet-level")).status == 409          # not while a record plays
+
+    serve(tmp_path, monkeypatch, check)
+    again = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x"))
+    assert again.det.start_level == -49                                  # kept across a restart
+    changed = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x", signal_threshold_db=-40))
+    assert changed.det.start_level == -28                                # until the option itself is changed

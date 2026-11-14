@@ -43,8 +43,10 @@ async def ffmpeg_blocks(source: str, input_format: str = "") -> AsyncIterator[np
     """Yield int16 mono blocks forever, restarting ffmpeg if the source drops (None marks a drop)."""
     cmd = [*ffmpeg_input(source, input_format), "-f", "s16le", "-ac", "1", "-ar", str(SAMPLE_RATE), "-"]
 
+    stalled = False                      # said once, not on every new attempt
     while True:
-        log.info("Opening audio input: %s", source)
+        if not stalled:
+            log.info("Opening audio input: %s", source)
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
@@ -53,12 +55,15 @@ async def ffmpeg_blocks(source: str, input_format: str = "") -> AsyncIterator[np
         try:
             while True:
                 data = await asyncio.wait_for(proc.stdout.readexactly(BLOCK_BYTES), STALL_SECONDS)
+                stalled = False
                 yield np.frombuffer(data, dtype=np.int16)
         except asyncio.IncompleteReadError:
             log.warning("Audio input ended; retrying in 5 s")
             yield None      # nothing is playing while there is no input
         except asyncio.TimeoutError:
-            log.warning("No audio arrived for %d s; opening the input again", STALL_SECONDS)
+            if not stalled:
+                log.warning("No audio arrived for %d s; opening the input again until it does", STALL_SECONDS)
+            stalled = True
             yield None
         finally:
             if proc.returncode is None:

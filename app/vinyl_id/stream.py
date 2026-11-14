@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 META_EVERY = 16000   # bytes of audio between two metadata blocks (about 0.4 s)
 MAX_LISTENERS = 4    # each listener is its own encoder; a player normally opens one
+WRITE_SECONDS = 15   # a player that takes nothing for this long is gone
 _listeners = 0
 
 
@@ -64,12 +65,14 @@ async def _serve(req: web.Request, app: App) -> web.StreamResponse:
     try:
         while True:
             # a source that hangs ends the stream; the player then opens it again
-            await resp.write(await asyncio.wait_for(proc.stdout.readexactly(META_EVERY), audio.STALL_SECONDS))
+            data = await asyncio.wait_for(proc.stdout.readexactly(META_EVERY), audio.STALL_SECONDS)
+            await asyncio.wait_for(resp.write(data), WRITE_SECONDS)
             if with_meta:
                 if n % 5 == 0:                      # about every 2 s is plenty
                     now = app.stream_title()
                 n += 1
-                await resp.write(b"\0" if now == sent else icy_block(*now))   # 0 = nothing new
+                block = b"\0" if now == sent else icy_block(*now)             # 0 = nothing new
+                await asyncio.wait_for(resp.write(block), WRITE_SECONDS)
                 sent = now
     except (asyncio.IncompleteReadError, asyncio.TimeoutError, ConnectionError):
         pass

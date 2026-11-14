@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import os
+import socket
 from dataclasses import dataclass
 
 APP_NAME = "Vinyl ID"
-VERSION = "0.9.1"
+VERSION = "0.10.0"
 SIGNATURE = f"{APP_NAME} v{VERSION} by Goobis"
 AI_NOTE = "AI was used to help develop this application"
+
+
+def lan_ip() -> str:
+    """This machine's address on the network (for the cover address given to displays)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))   # no packet is sent; just picks the LAN interface
+        return s.getsockname()[0]
+    except OSError:                   # no network yet: start anyway
+        return "127.0.0.1"
+    finally:
+        s.close()
 
 
 def _f(name: str, default: float) -> float:
@@ -25,7 +38,7 @@ class Settings:
     audio_input: str = _s("AUDIO_INPUT")
     audio_input_format: str = _s("AUDIO_INPUT_FORMAT")  # e.g. "alsa"; blank = auto
 
-    # Signal detection (dBFS). Tune with the "Input Level" sensor in HA.
+    # Signal detection (dBFS). The page shows the input level and sets the threshold with a button.
     signal_threshold_db: float = _f("SIGNAL_THRESHOLD_DB", -50)
     start_margin_db: float = _f("START_MARGIN_DB", 12)   # a record starts only with sound this far above the threshold
     start_seconds: float = _f("START_SECONDS", 2)        # sound this long = record started
@@ -41,7 +54,7 @@ class Settings:
     retry_seconds: float = _f("RETRY_SECONDS", 30)       # when a sample wasn't recognized
 
     # MQTT
-    mqtt_host: str = _s("MQTT_HOST", "homeassistant.local")
+    mqtt_host: str = _s("MQTT_HOST")            # blank = no MQTT: the integration alone shows the record
     mqtt_port: int = int(_f("MQTT_PORT", 1883))
     mqtt_user: str = _s("MQTT_USER")
     mqtt_password: str = _s("MQTT_PASSWORD")
@@ -56,7 +69,8 @@ class Settings:
     data_dir: str = _s("DATA_DIR", "/data")
     max_library_mb: float = _f("MAX_LIBRARY_MB", 0)      # stop learning at this size on disk; 0 = no limit
     web_port: int = int(_f("WEB_PORT", 8780))            # not 8095: that is Music Assistant's
-    public_url: str = _s("PUBLIC_URL", "http://localhost:8780")  # how HA reaches this service
+    # how other devices reach this service; worked out by itself unless you set it
+    public_url: str = _s("PUBLIC_URL") or f"http://{lan_ip()}:{int(_f('WEB_PORT', 8780))}"
 
     receiver_name: str = _s("RECEIVER_NAME", "Vinyl ID Listener")  # the silent speaker's name in Music Assistant
 

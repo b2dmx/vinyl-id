@@ -112,3 +112,20 @@ async def test_a_change_during_a_check_is_looked_at_afterwards(hass):
     cast(hass, members=(CAST, EAR, KITCHEN))
     await router.check()
     assert seen == [SYNC, DIRECT]
+
+
+async def test_a_switch_that_will_not_switch_is_left_for_a_while(hass):
+    cast(hass, members=(CAST, EAR, KITCHEN))
+    hass.states.async_set(EAR, "idle")
+    hass.states.async_set(MONITOR, DIRECT, {"options": [DIRECT, SYNC]})
+    tries = []
+
+    async def refuse(call):
+        tries.append(1)
+        raise HomeAssistantError("no")
+
+    hass.services.async_register("select", "select_option", refuse)
+    router = Router(hass, CAST, LINE_IN, EAR, MONITOR)
+    await router.check()
+    await router.check()
+    assert len(tries) == 1 and router._retry == routing.RETRY_AFTER      # the record's own back-off is untouched

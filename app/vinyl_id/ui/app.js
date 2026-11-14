@@ -59,10 +59,10 @@ function renderNow() {
   if (!n) {
     el.innerHTML = `<div class="now"><div class="art">${icon(I.album)}</div><div class="info">
       <h2 class="title">${s.playing ? "Listening..." : "Nothing playing"}</h2>
-      <p class="sub">${s.playing ? (s.unknown ? "Shazam doesn't know this one." : "Working out what's playing.") : "Drop the needle and it shows up here."}</p>
-      ${!s.playing && s.level <= -88 ? `<p class="muted">No sound is reaching Vinyl ID. Check that the record is sent to its silent speaker (${esc(s.listener || "Vinyl ID Listener")}) in Music Assistant.</p>` : ""}
-      ${s.unknown ? `<div class="row"><button class="btn tonal" id="nameit">Name it</button></div>` : ""}</div></div>`;
-    if (s.unknown) $("#nameit").onclick = () => nameDialog(null);
+      <p class="sub">${s.playing ? (s.unknown ? (s.shazam_ok === false ? "Couldn't reach Shazam. Trying again; you can name the song yourself." : "Shazam doesn't know this one.") : "Working out what's playing.") : "Drop the needle and it shows up here."}</p>
+      ${!s.playing && s.level <= -88 ? `<p class="muted">No sound is reaching Vinyl ID. Check the line-in fields of the Vinyl ID integration (Settings > Devices & services > Vinyl ID > Configure): it connects the record to the silent speaker (${esc(s.listener || "Vinyl ID Listener")}).</p>` : ""}
+      ${s.playing ? `<div class="row"><button class="btn tonal" id="nameit">Name it</button></div>` : ""}</div></div>`;
+    if (s.playing) $("#nameit").onclick = () => nameDialog(null);
     return;
   }
   const side = n.side ? `<span class="chip tonal">Side ${esc(n.side)} · ${n.track_number} of ${n.side_tracks}</span>` : "";
@@ -104,7 +104,7 @@ function nameDialog(n) {
     ev.currentTarget.disabled = true;          // a second press would save the song twice
     try {
       await post("now/label", { title, artist, album: $("#f-album").value.trim() });
-      dlg.close(); refresh();
+      dlg.close(); refresh(); loadAlbums();
     } catch (e) { fail(e); if ($("#save")) $("#save").disabled = false; }
   };
 }
@@ -188,10 +188,12 @@ async function albumDialog(id) {
       <div class="row">${discs.map((d) => `<button class="btn ${discArt.includes(d) ? "tonal" : "text"}" data-disc="${d}">LP ${d}${discArt.includes(d) ? " · set" : ""}</button>`).join("")}</div>
       <input type="file" id="disc-file" accept="image/*" hidden></div>` : ""}
     ${tracks.length ? `<div><h3>Tracks</h3><div class="list" style="gap:2px">${rows}</div></div>` : `<p class="muted">No track list yet. Find the pressing to follow it side by side.</p>`}`,
-    `<button class="btn text" data-close>Close</button>${tracks.length ? `<button class="btn tonal" id="spinit">${icon(I.play, "s")}Spin this album</button>` : ""}<button class="btn filled" id="save">Save</button>`);
+    `<button class="btn text" data-close>Close</button>${tracks.length ? `<button class="btn tonal" id="spinit">${icon(I.play, "s")}Follow this album</button>` : ""}<button class="btn filled" id="save">Save</button>`);
   $("#save").onclick = async () => {
+    const artist = $("#f-artist").value.trim(), album = $("#f-album").value.trim();
+    if (!artist || !album) return toast("An album needs an artist and a name");
     try {
-      await api(`albums/${id}`, { method: "PATCH", body: { artist: $("#f-artist").value, album: $("#f-album").value } });
+      await api(`albums/${id}`, { method: "PATCH", body: { artist, album } });
       dlg.close(); await loadAlbums(); refresh();
     } catch (e) { fail(e); }
   };
@@ -362,7 +364,7 @@ function addAlbumDialog(forId = null, preset = "") {
 
 // ---- wiring -------------------------------------------------------------------------------
 // what the Now Playing and Now spinning cards are drawn from
-const sig = (s) => JSON.stringify([s.now && [s.now.id, s.now.title, s.now.artist, s.now.album, s.now.art_url, s.now.track_length, s.now.track_started_at, s.now.source, s.now.spin_mismatch], s.playing, s.unknown, !s.playing && s.level <= -88, s.spin && [s.spin.index, s.spin.album_id, s.spin.album, s.spin.artist, s.spin.mismatch, (s.spin.tracks || []).map((t) => [t.title, t.length, t.source])]]);
+const sig = (s) => JSON.stringify({ ...s, level: 0, start_level: 0, library: 0, library_mb: 0, library_full: 0, quiet: !s.playing && s.level <= -88 });
 
 async function refresh() {
   try {
@@ -378,6 +380,7 @@ async function refresh() {
         ? `The library is full (${size} of ${s.library_limit_mb} MB): new songs are not learned. Forget songs you don't need, or raise the limit on the app's Configuration tab.`
         : `Library: ${s.library} ${s.library === 1 ? "song" : "songs"}, ${size} MB${s.library_limit_mb ? ` of ${s.library_limit_mb} MB` : ""}`;
       if ($("#lvl")) $("#lvl").textContent = `Input level ${s.level} dB. A record starts at ${s.start_level} dB.`;
+      if ($("#quiet")) $("#quiet").hidden = s.playing;
       $("#size").classList.toggle("notice", !!s.library_full);
     }
     if (changed || !$("#now").firstChild) { renderNow(); renderSpin(); }
@@ -390,6 +393,7 @@ fetch("ui/logo.svg").then((r) => r.text()).then((t) => {
   $("#logo").innerHTML = svg; $("#logo2").innerHTML = svg;
 });
 $("#add-album").onclick = () => addAlbumDialog();
+if ($("#quiet")) $("#quiet").onclick = () => post("quiet-level", {}).then((s) => { toast(`Done. A record now starts at ${s.start_level} dB.`); refresh(); }, fail);
 let qTimer;
 $("#q").oninput = (e) => { query = e.target.value.trim(); clearTimeout(qTimer); qTimer = setTimeout(loadAlbums, 200); };
 refresh(); loadAlbums(); loadLeftovers();

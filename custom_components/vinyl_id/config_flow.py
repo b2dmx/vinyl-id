@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import aiohttp
@@ -51,10 +52,15 @@ def _guess_listener(hass: HomeAssistant, listener: str = "") -> dict[str, str]:
         if name.lower() == listener.lower() if listener else name.lower().startswith("vinyl id"):
             found[CONF_LISTENER] = e.entity_id
             break
-    for state in hass.states.async_all("media_player"):
-        line_in = [s for s in state.attributes.get("source_list") or [] if "sendspin source" in s.lower()]
-        if line_in:
-            found[CONF_SOURCE_PLAYER], found[CONF_SOURCE_NAME] = state.entity_id, line_in[0]
+    # A line-in that Music Assistant offers as a source: by its usual name first, then by any
+    # name that says line-in.
+    for wanted in (r"sendspin source", r"line.?in|aux|analog"):
+        for state in hass.states.async_all("media_player"):
+            line_in = [s for s in state.attributes.get("source_list") or [] if re.search(wanted, s.lower())]
+            if line_in:
+                found[CONF_SOURCE_PLAYER], found[CONF_SOURCE_NAME] = state.entity_id, line_in[0]
+                break
+        if CONF_SOURCE_PLAYER in found:
             break
     for state in hass.states.async_all("select"):
         if state.entity_id.endswith("_line_in_monitor"):
@@ -120,4 +126,6 @@ class VinylOptionsFlow(OptionsFlow):
             return self.async_create_entry(data=_options(user_input))
         return self.async_show_form(
             step_id="init",
-            data_schema=self.add_suggested_values_to_schema(vol.Schema(PLAYERS), self.config_entry.options))
+            # what is still empty is guessed again: the silent speaker may not have existed at set-up
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(PLAYERS), {**_guess_listener(self.hass), **self.config_entry.options}))

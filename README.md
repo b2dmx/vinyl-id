@@ -27,8 +27,8 @@ Vinyl ID listens to your record player and shows the song, artist, album and cov
 
 ## What you need
 
-- Home Assistant with the **Mosquitto broker** app and the **MQTT** integration.
-- A way to get the record's audio onto your network. The tested way is a line-in player that **Music Assistant** can play from, such as an Apollo CAST: turntable (with a phono preamp) into its Line In.
+- Home Assistant.
+- A way to get the record's audio onto your network. The tested way is a line-in player that **Music Assistant** can play from, such as an Apollo CAST: turntable (with a phono preamp) into its Line In. It qualifies if, in Music Assistant, that player's list of sources includes its line-in.
 - For that way: the **Music Assistant** app with its **Sendspin** provider on, and the Music Assistant integration.
 - **HACS** (or the Marketplace), for the integration.
 
@@ -41,37 +41,40 @@ Vinyl ID listens to your record player and shows the song, artist, album and cov
 1. Add the repository with the button above, install **Vinyl ID** and start it. The first install builds the app on your device, which takes several minutes. The default **Audio source**, Sendspin, is the tested one.
 2. In Music Assistant a new speaker appears: **Vinyl ID Listener** (or the name you gave it on the app's Configuration tab). It is silent. It is how the record reaches the app.
 
-**2. Send the record to the listener**
-
-In Music Assistant, open your line-in player (the CAST), choose its line-in as the **source**, then **group** Vinyl ID Listener onto that player. The integration in step 3 does this for you from then on.
-
-**3. The integration**
+**2. The integration**
 
 1. In HACS, add `https://github.com/b2dmx/vinyl-id` as a custom repository of type **Integration**, download **Vinyl ID**, and restart Home Assistant.
 2. Settings > Devices & services > Add integration > **Vinyl ID**. Most fields are filled in for you:
    - **Address of the Vinyl ID app:** leave as it is.
    - **Speaker that plays your record:** the speaker or amp you listen on. The Record Player's volume and power buttons control it.
    - **The app's silent speaker:** Vinyl ID Listener.
-   - **Player whose line-in the record is on** and **its line-in source:** your CAST and the source you chose in step 2. These two and the silent speaker work together: with all three filled in, Vinyl ID keeps the record connected.
+   - **Player whose line-in the record is on** and **its line-in source:** your CAST and its line-in. These two and the silent speaker work together: with all three filled in, Vinyl ID connects the record to the app and keeps it connected. Nothing needs to be set up in Music Assistant by hand.
    - **That player's direct / in-sync switch:** leave empty unless your player has such a setting.
 
-**4. Check it hears the record**
+   If **The app's silent speaker** is empty, wait a minute for Music Assistant to find it and open the form again. If the line-in fields are empty, pick your line-in player, open it in Home Assistant to see its sources, and type the line-in's name exactly. You can change all of this later under Settings > Devices & services > Vinyl ID > Configure.
 
-Open the Vinyl ID page: on the app's page in Home Assistant press **Open Web UI**, and switch on **Show in sidebar** to keep it one click away. Drop the needle. At the bottom, the page shows how loud the input is and how loud it must be for a record to start. If the first number never rises while a record plays, the record is not reaching the listener: repeat step 2.
+**3. Check it hears the record**
+
+Open the Vinyl ID page: on the app's page in Home Assistant press **Open Web UI**, and switch on **Show in sidebar** to keep it one click away.
+
+1. With the turntable on and the needle still up, press **Needle is up: use this as the quiet level** at the bottom of the page. This teaches Vinyl ID your turntable's silence, so it can tell songs from the gaps between them. If the button is missing, Vinyl ID thinks a record is playing: type a higher **Quiet level** on the app's Configuration tab.
+2. Drop the needle. The bottom of the page shows how loud the input is and how loud it must be for a record to start. If the first number never rises while a record plays, the record is not reaching the silent speaker: check the line-in fields of the integration (Settings > Devices & services > Vinyl ID > Configure), or connect it by hand in Music Assistant (open your line-in player, choose its line-in as the **source**, then **group** Vinyl ID Listener onto it).
 
 The song should appear within about 10 to 15 seconds on the page and on the **Record Player**. If Shazam doesn't know it, press **Name it** on the page and Vinyl ID learns it.
 
 **Other audio sources**
 
 - **Stream:** if something already serves the turntable as an audio stream, choose Stream and enter its address (for example `http://192.168.1.50:8000/turntable.mp3`). Music Assistant is not needed.
-- **AirPlay:** Vinyl ID Listener appears as an AirPlay speaker instead. This path has not been tested on Home Assistant OS.
+- **AirPlay:** Vinyl ID Listener appears as an AirPlay speaker instead. This path has not been tested yet.
 
-**On a NAS or server instead of Home Assistant OS:** download this repository (Code > Download ZIP, or `git clone`), fill in `docker-compose.yml` (your MQTT broker, a login for it, which you create in Home Assistant under Settings > People > Users, and `PUBLIC_URL`), then run `docker compose up -d --build`. The library page is at `http://<that machine>:8780`, and that is also the address to give the integration. Anyone on your network can open the page and, unless you set `EDIT_FROM`, change your library.
+The Stream address, the listener's name, **Also allow edits from** and **Library size limit** are optional settings: on the app's Configuration tab, switch on **Show unused optional configuration options** to see them.
+
+**On a NAS or server instead of Home Assistant OS:** download this repository (Code > Download ZIP, or `git clone`), look through `docker-compose.yml` (the defaults work; MQTT is optional), then run `docker compose up -d --build`. The library page is at `http://<that machine>:8780`, and that is also the address to give the integration. Anyone on your network can open the page and, unless you set `EDIT_FROM`, change your library.
 
 ## Which entity is which
 
 - **Record Player** (from the integration) is the one to look at and put on dashboards: song, cover, progress, and your speaker's volume.
-- From the app, for automations and displays: **Record Playing**, **Now Playing**, **Album Art**, **Library Size**, **Input Level**, and a **Forget Current Song** button.
+- From the app, if you have the **Mosquitto broker** app and the MQTT integration (optional), for automations and displays: **Record Playing**, **Now Playing**, **Album Art**, **Library Size**, **Input Level**, and a **Forget Current Song** button.
 - **Vinyl ID Listener** is the silent speaker in Music Assistant. It says "playing" whenever the line-in is on, even with no record. The integration hides it from dashboards; it stays under Settings > Entities.
 
 ## Keeping the record connected
@@ -94,7 +97,7 @@ Open the Vinyl ID page.
 
 ## Tips
 
-- **Signal threshold** (on the app's Configuration tab): the level of your turntable when it is on but not playing. The bottom of the page shows the input level; use the number you see with the turntable on and the needle up. A record starts once the sound is 12 dB above it, and a gap between songs is sound that falls back to it. Save and restart the app for a new threshold to apply.
+- **Quiet level** (the signal threshold): the level of your turntable when it is on but not playing. Set it with the button at the bottom of the page, with the turntable on and the needle up. A record starts once the sound is 12 dB above it, and a gap between songs is sound that falls back to it. You can also type it on the app's Configuration tab.
 - **Learn my records** is on by default. Turn it off to always use Shazam.
 - The library can only be changed from the Vinyl ID page in Home Assistant. To let a script or another computer change it too, list its address under **Also allow edits from**. Anyone on your network can view the page and play the stream; only changes are restricted.
 - Covers you set are never replaced automatically.
@@ -102,11 +105,15 @@ Open the Vinyl ID page.
 - Space: a cover is about 50-150 KB and a learned song about 0.2 MB, so 1,000 songs is roughly 250 MB. The page shows the current size. **Library size limit** stops learning at a size you choose; songs already learned keep working.
 - The app moved to another machine or port? Settings > Devices & services, open the **Vinyl ID** integration (not the Vinyl ID device under MQTT), then the three-dot menu > Reconfigure.
 
+## Help
+
+Open an issue at [github.com/b2dmx/vinyl-id/issues](https://github.com/b2dmx/vinyl-id/issues) with the app's log (Settings > Apps > Vinyl ID > Log), both version numbers (app and integration), your audio source and your line-in player.
+
 ## Updating and removing
 
 - **Update the app:** Settings > Apps > Vinyl ID > Update. **Update the integration:** HACS > Vinyl ID > Update, then restart Home Assistant.
 - **Your library** lives in the app's data. It is included in Home Assistant backups of the app, and uninstalling the app deletes it.
-- **To remove everything:** delete the Vinyl ID integration, remove it in HACS, uninstall the app, then delete the Vinyl ID device under MQTT.
+- **To remove everything:** delete the Vinyl ID integration, remove it in HACS, uninstall the app, then delete the Vinyl ID device under MQTT if you have one.
 
 ## License
 
@@ -116,6 +123,6 @@ The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.9.1 by Goobis<br>
+  Vinyl ID v0.10.0 by Goobis<br>
   AI was used to help develop this application
 </p>

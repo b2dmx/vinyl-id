@@ -16,6 +16,19 @@ jobs:
       - run: pip install pytest pytest-asyncio numpy aiohttp "paho-mqtt>=2.1,<3" shazamio==0.9.0
       - run: pytest -q
 
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build -t vinyl-id app
+      # the receiver must still take the options the start script gives it
+      - run: |
+          docker run --rm --entrypoint sendspin vinyl-id daemon --help > help.txt
+          for flag in --name --audio-device --disable-mpris --hardware-volume --settings-dir; do
+            grep -q -- "$flag" help.txt || { echo "sendspin daemon no longer has $flag"; exit 1; }
+          done
+      - run: docker run --rm --entrypoint python vinyl-id -c "import vinyl_id.__main__, shazamio, paho.mqtt.client"
+
   integration:
     runs-on: ubuntu-latest
     steps:
