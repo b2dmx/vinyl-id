@@ -537,3 +537,207 @@ def test_after_a_stop_nothing_is_learned_by_place_until_a_track_ends_on_time(tmp
         app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks()), "A", 1))
     three = next(t for t in app.lib.album_tracks(app.spin.album_id) if t["title"] == "Song Three")
     assert not three["song_id"] or app.lib.hash_count(three["song_id"]) == 0     # the stranger was not learned as B1
+
+
+# --- audit of 2026-11-16 ---------------------------------------------------------------
+def test_a_flip_after_a_long_break_goes_to_the_next_side_as_a_guess():
+    sp = Spin(1, [dict(t) for t in LP], 2, start=0.0)            # last track of side A
+    sp.stopped(100.0)
+    assert sp.started(100.0 + 600) == "flip" and sp.cur["side"] == "B"      # ten minutes: still the next side
+    assert sp.guessed and not sp.anchored and not sp.sure                    # ... but nothing is learned on trust
+    sp = Spin(1, [dict(t) for t in LP], 2, start=0.0)
+    sp.stopped(100.0)
+    assert sp.started(160.0) == "flip" and not sp.guessed and sp.anchored    # turned over at once: as before
+
+
+def test_the_arm_being_lifted_is_not_the_start_of_the_next_side():
+    sp = Spin(1, [dict(t) for t in LP], 2, start=0.0)
+    assert sp.track_change(90.0, dip=15.0) and sp.cur["side"] == "B"         # a thump after 15 s of quiet
+    assert sp.guessed and not sp.anchored
+    assert sp.flip_again(110.0) and sp.start == 110.0 and sp.i == 3          # the needle comes down 20 s later
+    assert not sp.flip_again(172.0)                                          # a minute on: this is the track's end
+    sp = Spin(1, [dict(t) for t in LP], 0, start=0.0)
+    assert not sp.flip_again(10.0)                                           # no flip was guessed: an ordinary gap
+
+
+def test_a_held_gap_is_remembered_for_the_track_only():
+    sp = Spin(1, [dict(t) for t in LP], 0, start=0.0)
+    sp.held = True
+    assert sp.tick(64.0) and not sp.held
+    sp.held = True
+    assert sp.track_change(125.0) and not sp.held
+    sp.held = True
+    sp.jump(0, None)
+    assert not sp.held
+
+
+def _album(app):
+    return app.lib.add_album_from_release("The Band", "Test LP", "mb-1", tracks())
+
+
+def _hashes_of(app, title):
+    t = next(t for t in app.lib.album_tracks(app.lib.albums("Test LP")[0]["id"]) if t["title"] == title)
+    return app.lib.hash_count(t["song_id"]) if t["song_id"] else 0
+
+
+async def _never(self, pcm):
+    return None
+
+
+def test_a_track_much_shorter_than_listed_does_not_take_the_next_songs_opening(tmp_path, monkeypatch):
+    silence = lambda s: np.zeros(SAMPLE_RATE * s, np.int16)       # noqa: E731
+    # Song One is listed at a minute; this pressing's runs 30 s. Its gap looks like a quiet passage.
+    side = np.concatenate([fake_song(11, 30), silence(3), fake_song(12, 90), silence(50)])
+    app = _run(tmp_path, monkeypatch, side, _never, before=lambda app: app.start_spin(_album(app), "A", 1))
+    assert _hashes_of(app, "Song One") == 0           # half of what was heard as "Song One" was Song Two
+
+
+def test_a_quiet_passage_and_a_late_gap_still_teach_the_track(tmp_path, monkeypatch):
+    silence = lambda s: np.zeros(SAMPLE_RATE * s, np.int16)       # noqa: E731
+    # Song One (listed 60 s) has a quiet passage and runs 64 s: the list moves on first, then the gap comes
+    side = np.concatenate([fake_song(11, 20), silence(3), fake_song(11, 41), silence(3), fake_song(12, 60), silence(50)])
+    app = _run(tmp_path, monkeypatch, side, _never, before=lambda app: app.start_spin(_album(app), "A", 1))
+    assert _hashes_of(app, "Song One") > 500
+
+
+def test_another_record_running_past_the_listed_length_is_not_learned(tmp_path, monkeypatch):
+    side = np.concatenate([fake_song(11, 100), np.zeros(SAMPLE_RATE * 50, np.int16)])   # no gap at one minute
+
+    async def other(self, pcm):
+        return Track("Something Else", "Other Act", "Other LP", "", "shz9")
+
+    app = _run(tmp_path, monkeypatch, side, other, before=lambda app: app.start_spin(_album(app), "A", 1))
+    assert app.lib.db.execute("SELECT COALESCE(SUM(hashes), 0) FROM songs").fetchone()[0] == 0
+
+
+def test_without_a_track_list_the_next_song_is_not_learned_into_the_last(tmp_path, monkeypatch):
+    # Song One runs straight into another song; the gap comes only after that one
+    two = fake_song(12, 75)
+    side = np.concatenate([fake_song(11, 30), two, np.zeros(SAMPLE_RATE * 3, np.int16), fake_song(13, 20),
+                           np.zeros(SAMPLE_RATE * 50, np.int16)])
+    calls = {"n": 0}
+
+    async def first_only(self, pcm):
+        calls["n"] += 1
+        return Track("Song One", "The Band", "", "", "shz1", offset=0.0) if calls["n"] == 1 else None
+
+    app = _run(tmp_path, monkeypatch, side, first_only)
+    assert app.lib.match(hashes(two[SAMPLE_RATE * 52:SAMPLE_RATE * 64])) is None
+
+
+def test_a_confirmed_clip_is_learned_and_what_came_after_it_waits(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_mod, "Publisher", Pub)
+    app = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x"))
+    app.current, _ = app.lib.upsert("A", "B", "", "x")
+    song = fake_song(7, 30)
+    app.learn_blocks = [song[i:i + BLOCK] for i in range(0, len(song), BLOCK)]      # 120 blocks from block 0
+    app.block_i = 120
+
+    async def go():
+        app._commit_learning(confirmed=True, upto=80)             # recognition heard blocks 68-80
+        await asyncio.sleep(0.5)
+
+    asyncio.run(go())
+    assert len(app.learn_blocks) == 40 and app.learn_start == 80  # the last 10 s are not confirmed yet
+    assert app.lib.match(hashes(song[SAMPLE_RATE * 5:SAMPLE_RATE * 17]))
+    assert app.lib.match(hashes(song[SAMPLE_RATE * 21:SAMPLE_RATE * 30])) is None
+
+
+def test_hum_under_a_picked_album_is_still_found_out(tmp_path, monkeypatch):
+    seen = []
+    side = np.concatenate([fake_song(11, 20), np.zeros(SAMPLE_RATE * 50, np.int16)])
+
+    def pick(app):
+        assert app._auto_quiet
+        app.start_spin(_album(app), "A", 1)
+        feed = app.cal.feed
+        app.cal.feed = lambda db, playing, recognized: (seen.append((playing, recognized)), feed(db, playing, recognized))[1]
+
+    _run(tmp_path, monkeypatch, side, _never, before=pick)
+    assert (True, False) in seen and (True, True) not in seen     # a place on the list is not "recognized"
+
+
+def test_a_track_ending_on_time_does_not_settle_an_open_question(tmp_path, monkeypatch):
+    silence = lambda s: np.zeros(SAMPLE_RATE * s, np.int16)       # noqa: E731
+    one_side = [{"n": n, "side": "A", "pos": n, "title": f"Song {n}", "length": sec}
+                for n, sec in enumerate((60, 90, 60, 60), 1)]
+    # Song 1 plays; a minute of nothing; then another record, whose second song happens to run 90 s
+    side = np.concatenate([fake_song(11, 60), silence(60), fake_song(21, 30), silence(3), fake_song(22, 90),
+                           silence(3), fake_song(23, 40), silence(50)])
+    box = {}
+
+    async def shazam(self, pcm):
+        return Track("Something Else", "Other Act", "Other LP", "", "shz9") if box["app"].clock.t > 110 else None
+
+    def pick(app):
+        box["app"] = app
+        app.start_spin(app.lib.add_album_from_release("The Band", "Test LP", "mb-1", one_side), "A", 1)
+
+    app = _run(tmp_path, monkeypatch, side, shazam, before=pick)
+    assert app.spin.mismatch is not None and not app.spin.sure    # still asking; nothing taken on trust
+    assert app.lib.db.execute("SELECT COALESCE(SUM(hashes), 0) FROM songs WHERE title != 'Song 1'").fetchone()[0] == 0
+
+
+def test_lost_audio_is_not_the_end_of_the_side():
+    from vinyl_id.detector import Detector, Event
+
+    def run(det, db, seconds):
+        return [e for e in (det.feed(db) for _ in range(int(seconds / BLOCK_SECONDS))) if e]
+
+    d = Detector(Settings(audio_input_format="pulse"))
+    assert run(d, -20, 30) == [Event.STARTED]
+    assert run(d, -90, 50) == [Event.STOPPED] and d.stop_lost           # exact silence: the stream dropped
+    assert run(d, -20, 30) == [Event.STARTED]
+    assert run(d, -70, 50) == [Event.STOPPED] and not d.stop_lost       # the run-out groove: the side ended
+    d = Detector(Settings())
+    run(d, -20, 30)
+    assert run(d, -90, 50) == [Event.STOPPED] and not d.stop_lost       # a wired input has no dropouts
+
+
+def test_an_album_picked_before_a_restart_still_starts_at_the_needle_drop(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_mod, "Publisher", Pub)
+    app = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x"))
+    album = _album(app)
+    app.start_spin(album, "A", 1)                                 # picked with the needle up
+    again = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x"))
+    assert again.spin.stopped_at is None and again.spin.sure and again.spin.started(5.0) == "new"
+    app.spin.started(5.0)                                         # the same, but saved while the record played
+    app._save_spin()
+    again = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x"))
+    assert again.spin.stopped_at is not None and not again.spin.sure
+
+
+def test_a_play_is_counted_once_however_the_title_moves(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_mod, "Publisher", Pub)
+    app = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x"))
+    a, _ = app.lib.upsert("A", "B", "", "a")
+    b, _ = app.lib.upsert("B", "B", "", "b")
+    for sid in (a, b, a, b):                                      # on early, back, on again
+        app._count_play(sid)
+    assert [r[0] for r in app.lib.db.execute("SELECT plays FROM songs ORDER BY id")] == [1, 1]
+
+
+def test_a_song_forgotten_while_it_is_being_looked_up_does_not_come_back(tmp_path, monkeypatch):
+    monkeypatch.setattr(main_mod, "Publisher", Pub)
+    app = main_mod.App(Settings(data_dir=str(tmp_path), audio_input="x"))
+    app.clock = FakeClock()
+    app.det.playing = True
+    sid, _ = app.lib.upsert("A", "B", "", "x")
+    song = fake_song(7, 60)
+    app.lib.learn(sid, hashes(song), 0)
+    match = app.lib.match
+
+    def forgets(hs):
+        hit = match(hs)
+        app.loop.call_soon_threadsafe(app.forget, sid)            # "forget this song", pressed just now
+        return hit
+
+    app.lib.match = forgets
+
+    async def go():
+        app.loop = asyncio.get_running_loop()
+        app.busy = True
+        await app._identify(song[SAMPLE_RATE * 20:SAMPLE_RATE * 32], 0)
+
+    asyncio.run(go())
+    assert app.current is None and app.lib.song(sid) is None

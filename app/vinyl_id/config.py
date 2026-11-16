@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import socket
+import time
 from dataclasses import dataclass
 
 APP_NAME = "Vinyl ID"
-VERSION = "0.12.2"
+VERSION = "0.12.3"
 SIGNATURE = f"{APP_NAME} v{VERSION} by Goobis"
 AI_NOTE = "AI was used to help develop this application"
 
@@ -24,8 +25,30 @@ def lan_ip() -> str:
         s.close()
 
 
+_found: tuple[float, str] = (0.0, "")      # (when looked up, address)
+
+
+def found_ip() -> str:
+    """lan_ip(), looked up again about once a minute: the network may not be up when the app
+    starts, and the address can change while it runs."""
+    global _found
+    at, ip = _found
+    keep = 60 if ip and ip != "127.0.0.1" else 5     # no network yet: look again soon
+    if not ip or time.monotonic() - at > keep:
+        ip = lan_ip()
+        _found = (time.monotonic(), ip)
+    return ip
+
+
 def _f(name: str, default: float) -> float:
-    return float(os.environ.get(name, default))
+    """A number from the environment. Left empty, the default counts."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return float(raw)
+    except ValueError:
+        raise SystemExit(f"Vinyl ID cannot start: the setting {name} must be a number, not {raw!r}") from None
 
 
 def _s(name: str, default: str = "") -> str:
@@ -61,6 +84,7 @@ class Settings:
     mqtt_port: int = int(_f("MQTT_PORT", 1883))
     mqtt_user: str = _s("MQTT_USER")
     mqtt_password: str = _s("MQTT_PASSWORD")
+    mqtt_tls: bool = _s("MQTT_TLS").strip().lower() in ("1", "true", "yes", "on")   # the broker wants TLS
     base_topic: str = _s("MQTT_BASE_TOPIC", "vinyl_id")
     discovery_prefix: str = _s("MQTT_DISCOVERY_PREFIX", "homeassistant")
 
@@ -72,14 +96,19 @@ class Settings:
     data_dir: str = _s("DATA_DIR", "/data")
     max_library_mb: float = _f("MAX_LIBRARY_MB", 0)      # stop learning at this size on disk; 0 = no limit
     web_port: int = int(_f("WEB_PORT", 8780))            # not 8095: that is Music Assistant's
-    # how other devices reach this service; worked out by itself unless you set it
-    public_url: str = _s("PUBLIC_URL") or f"http://{lan_ip()}:{int(_f('WEB_PORT', 8780))}"
+    # how other devices reach this service; worked out by itself (see public_url) unless you set it
+    public_url_set: str = _s("PUBLIC_URL").strip().rstrip("/")
 
     receiver_name: str = _s("RECEIVER_NAME", "Vinyl ID Listener")  # the silent speaker's name in Music Assistant
 
-    edit_from: str = _s("EDIT_FROM")  # comma-separated IPs allowed to edit; blank = anyone on the LAN
+    # comma-separated addresses or ranges (192.168.1.0/24) allowed to edit; blank = anyone on the LAN
+    edit_from: str = _s("EDIT_FROM")
 
     log_level: str = _s("LOG_LEVEL", "INFO")
+
+    @property
+    def public_url(self) -> str:
+        return self.public_url_set or f"http://{found_ip()}:{self.web_port}"
 
 
 SAMPLE_RATE = 16000  # Shazam fingerprints at 16 kHz mono

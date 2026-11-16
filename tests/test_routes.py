@@ -141,6 +141,67 @@ def test_only_allowed_addresses_may_change_things(tmp_path, monkeypatch):
 
     serve(tmp_path, monkeypatch, check, edit_from="10.9.9.9")
 
+    async def in_range(app, c):                                              # the test client is 127.0.0.1
+        assert (await c.post("/api/albums", json={"artist": "Band", "album": "LP"})).status == 200
+
+    serve(tmp_path / "range", monkeypatch, in_range, edit_from="10.9.9.9, 127.0.0.0/8")
+
+
+def test_a_page_of_another_website_cannot_change_things(tmp_path, monkeypatch):
+    async def check(app, c):
+        new = {"artist": "Band", "album": "LP"}
+        host = f"{c.host}:{c.port}"
+        for headers in ({"Origin": "http://evil.example"}, {"Sec-Fetch-Site": "cross-site"},
+                        {"Origin": "null"}, {"Origin": f"http://{host}", "Sec-Fetch-Site": "cross-site"}):
+            r = await c.post("/api/albums", data='{"artist": "Band", "album": "LP"}', headers=headers)
+            assert r.status == 403, headers
+        assert await (await c.get("/api/albums")).json() == []
+        # the page itself, Home Assistant's sidebar (it passes the page's own address on), and tools
+        assert (await c.post("/api/albums", json=new, headers={"Origin": f"http://{host}", "Sec-Fetch-Site": "same-origin"})).status == 200
+        assert (await c.post("/api/albums", json=new, headers={"Origin": "http://ha.local:8123", "X-Forwarded-Host": "ha.local:8123"})).status == 200
+        assert (await c.post("/api/albums", json=new)).status == 200
+        assert (await c.get("/api/albums", headers={"Origin": "http://evil.example"})).status == 200
+
+    serve(tmp_path, monkeypatch, check)
+
+
+def test_covers_are_only_fetched_from_the_internet(tmp_path, monkeypatch):
+    from vinyl_id import recognize
+
+    async def check(app, c):
+        album, _ = await new_album(c)
+        for url in ("http://127.0.0.1:1/x.jpg", "http://192.168.1.50/cover.jpg", "http://[::1]/x.jpg", "http://169.254.169.254/"):
+            r = await c.post(f"/api/albums/{album}/art", json={"url": url})
+            assert r.status == 400 and "upload" in await r.text(), url
+            assert await app.rec.fetch(url) is None          # also when a web address forwards there
+        assert await recognize.is_public("http://8.8.8.8/a.jpg") and not await recognize.is_public("ftp://8.8.8.8/a")
+        r = await c.post(f"/api/albums/{album}/art", json={"data": base64.b64encode(b"GIF8 but no picture").decode()})
+        assert r.status == 400 and "picture" in await r.text()
+        assert (await c.get(f"/api/albums/{album}/art")).status == 404
+
+    serve(tmp_path, monkeypatch, check)
+
+
+def test_searches_do_not_pile_up(tmp_path, monkeypatch):
+    async def check(app, c):
+        gate = asyncio.Event()
+
+        async def slow(_q):
+            await gate.wait()
+            return []
+
+        monkeypatch.setattr(app.rec, "search_releases", slow)
+        monkeypatch.setattr(app.rec, "search_art", slow)
+        waiting = [asyncio.ensure_future(c.get("/api/mb/search?q=x")) for _ in range(web.MAX_SEARCHES)]
+        await asyncio.sleep(0.2)
+        assert (await c.get("/api/mb/search?q=x")).status == 429
+        assert (await c.get("/api/art-search?q=x")).status == 429
+        gate.set()
+        assert [r.status for r in await asyncio.gather(*waiting)] == [200] * web.MAX_SEARCHES
+        assert (await c.get("/api/mb/search?q=x")).status == 200
+
+    serve(tmp_path, monkeypatch, check)
+
 
 def test_record_stream_names_its_song(tmp_path, monkeypatch):
     every = stream.META_EVERY
@@ -162,6 +223,9 @@ def test_record_stream_names_its_song(tmp_path, monkeypatch):
 
         assert (await c.head("/stream.mp3")).status == 200 and stream._listeners == 0   # a check starts no encoder
 
+        monkeypatch.setattr(stream, "_by_client", {"127.0.0.1": stream.MAX_PER_CLIENT})
+        assert (await c.get("/stream.mp3")).status == 503                    # one device cannot take every place
+        monkeypatch.setattr(stream, "_by_client", {})
         monkeypatch.setattr(stream, "_listeners", stream.MAX_LISTENERS)
         assert (await c.get("/stream.mp3")).status == 503
 

@@ -21,10 +21,12 @@ services:
       MQTT_PORT: 1883
       MQTT_USER: ""
       MQTT_PASSWORD: ""
+      MQTT_TLS: "false"        # true if your broker only takes encrypted connections (usually port 8883)
       # The library page. Not 8095: Music Assistant uses that port.
       WEB_PORT: 8780
       # PUBLIC_URL: http://192.168.1.50:8780   # only if displays cannot reach the address Vinyl ID finds by itself
-      # Who may change the library (comma-separated IP addresses). Blank = anyone on your network.
+      # Who may change the library: comma-separated addresses or ranges (192.168.1.20, 192.168.1.0/24).
+      # Blank = anyone on your network.
       EDIT_FROM: ""
       # The level of your turntable when it is on but not playing. Easier: the button on the page.
       SIGNAL_THRESHOLD_DB: -50   # at -50 it is found automatically

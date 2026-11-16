@@ -230,12 +230,16 @@ function lengthsDialog(id, tracks) {
     <div class="list" style="gap:2px">${rows}</div>`,
     `<button class="btn text" id="back">Back</button><button class="btn filled" id="save">Save</button>`);
   $("#back").onclick = () => albumDialog(id);
+  // A field you typed in counts, also when it now says what it said before: typing the listed
+  // length over itself is how you make it yours.
+  dlg.querySelectorAll(".len-in").forEach((inp) => (inp.oninput = () => { inp.dataset.touched = "1"; }));
   $("#save").onclick = async () => {
     const lengths = {};
     let bad = "";
     dlg.querySelectorAll(".len-in").forEach((inp) => {
       const t = tracks[Number(inp.dataset.i)], v = inp.value.trim();
-      if (v === (t.length ? mmss(t.length) : "")) return;
+      const same = v === (t.length ? mmss(t.length) : "");
+      if (!inp.dataset.touched || (same && (!v || t.source === "typed"))) return;
       if (v && !/^\d{1,2}:[0-5]\d$/.test(v)) { bad = `${t.side}${t.pos}`; return; }
       lengths[`${t.side}|${t.pos}`] = v || null;
     });
@@ -342,12 +346,13 @@ function addAlbumDialog(forId = null, preset = "") {
       $("#res").innerHTML = r.length ? `<div class="list">${r.map((x, i) => `<button class="pick" data-i="${i}"><span><b>${esc(x.album)}</b>
         <div class="sub">${esc(x.artist)} · ${esc([x.year, x.country, x.format, x.tracks ? x.tracks + " tracks" : ""].filter(Boolean).join(" · "))}${x.label ? " · " + esc(x.label) : ""}</div></span></button>`).join("")}</div>` : `<p class="muted">Nothing found. Try fewer words.</p>`;
       $("#res").querySelectorAll(".pick").forEach((b) => (b.onclick = async () => {
-        b.disabled = true; b.querySelector(".sub").textContent = "Adding...";
+        const sub = b.querySelector(".sub"), was = sub.textContent;
+        b.disabled = true; sub.textContent = "Adding...";
         try {
           const added = await post("albums/from-mb", { mbid: r[Number(b.dataset.i)].mbid, album_id: forId });
           artBust = Date.now(); toast(`Added with ${added.tracks} tracks`);
           await loadAlbums(); albumDialog(added.id);
-        } catch (e) { b.disabled = false; fail(e); }
+        } catch (e) { b.disabled = false; sub.textContent = was; fail(e); }
       }));
     } catch (e) { $("#res").textContent = "MusicBrainz didn't answer. Try again in a moment."; }
   };

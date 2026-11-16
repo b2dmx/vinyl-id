@@ -39,6 +39,7 @@ class Detector:
         self._calm = 0.0       # seconds of unbroken quiet up to now
         self._calm_before = 0.0  # ... and before the loud blocks being heard now
         self.last_dip = 0.0    # how long the last dip was (set when the sound comes back)
+        self.stop_lost = False  # the last stop was lost audio (exact silence), not a record ending
         # Over a network receiver, lost audio arrives as exact silence. That is never a gap.
         self._dropouts = s.audio_input_format == "pulse"
 
@@ -85,6 +86,10 @@ class Detector:
         # Playing: nothing but quiet for a long time means the record stopped.
         self._quiet = self._quiet + dt if quiet or pop else 0.0
         if self._quiet >= s.stop_seconds:
+            # Exact silence all the way, on a network receiver: the stream dropped out. That says
+            # nothing about the record, which may be playing on.
+            heard = max(self._dip_hi, db) if self._dip > 0 else db
+            self.stop_lost = self._dropouts and quiet and heard <= DIGITAL_SILENCE
             self.playing, self._loud, self._dip = False, 0.0, 0.0
             return Event.STOPPED
         if pop:

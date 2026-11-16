@@ -64,3 +64,48 @@ def test_the_app_starts_without_an_mqtt_broker(tmp_path):
     out = subprocess.run([sys.executable, str(script)], env=env, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert "MQTT_HOST" not in out.stdout and "export RECEIVER_NAME='Vinyl ID Listener'" in out.stdout
+
+
+def test_settings_left_empty_and_settings_that_are_no_number(monkeypatch):
+    import pytest
+
+    from vinyl_id import config
+
+    monkeypatch.setenv("MAX_LIBRARY_MB", "")
+    monkeypatch.setenv("MQTT_PORT", "  ")
+    assert config._f("MAX_LIBRARY_MB", 0) == 0 and config._f("MQTT_PORT", 1883) == 1883
+    monkeypatch.setenv("MQTT_PORT", "8883")
+    assert config._f("MQTT_PORT", 1883) == 8883
+    monkeypatch.setenv("STOP_SECONDS", "forty")
+    with pytest.raises(SystemExit, match="STOP_SECONDS"):
+        config._f("STOP_SECONDS", 45)
+
+
+def test_the_address_for_displays_follows_the_network(monkeypatch):
+    from vinyl_id import config
+
+    found = iter(["127.0.0.1", "192.0.2.7", "192.0.2.8"])     # no network yet at start-up, then one
+    monkeypatch.setattr(config, "lan_ip", lambda: next(found))
+    monkeypatch.setattr(config, "_found", (0.0, ""))
+    clock = [1000.0]
+    monkeypatch.setattr(config.time, "monotonic", lambda: clock[0])
+    s = config.Settings(web_port=8780)
+    assert s.public_url == "http://127.0.0.1:8780"
+    clock[0] += 10
+    assert s.public_url == "http://192.0.2.7:8780"
+    clock[0] += 10
+    assert s.public_url == "http://192.0.2.7:8780"            # not looked up on every use
+    clock[0] += 100
+    assert s.public_url == "http://192.0.2.8:8780"
+    assert config.Settings(public_url_set="http://vinyl.example").public_url == "http://vinyl.example"
+
+
+def test_edits_can_be_allowed_for_a_range_of_addresses():
+    import ipaddress
+
+    from vinyl_id.web import networks
+
+    nets = networks("192.168.1.20, 10.0.0.0/8, nonsense,")
+    assert len(nets) == 2
+    assert any(ipaddress.ip_address("10.4.5.6") in n for n in nets)
+    assert not any(ipaddress.ip_address("192.168.1.21") in n for n in nets)

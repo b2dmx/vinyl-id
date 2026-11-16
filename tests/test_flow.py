@@ -217,3 +217,27 @@ def test_a_correction_long_after_the_song_was_found_does_not_fold_it(tmp_path, m
 
     app = _run(tmp_path, monkeypatch, once, on_block=label)
     assert sorted(r[0] for r in app.lib.db.execute("SELECT title FROM songs")) == ["My Y", "Song X"]
+
+
+def test_a_slow_cover_lookup_is_not_shazam_failing(monkeypatch):
+    import vinyl_id.recognize as rec_mod
+
+    async def go():
+        rec = rec_mod.Recognizer()
+
+        async def recognize(_wav):
+            return {"track": {"title": "T", "subtitle": "A", "key": 5, "images": {"coverart": "http://x/shazam.jpg"},
+                              "sections": [{"metadata": [{"title": "Album", "text": "LP"}]}]}, "matches": []}
+
+        async def slow(self, track):
+            await asyncio.sleep(30)
+
+        rec._shazam.recognize = recognize
+        monkeypatch.setattr(rec_mod.Recognizer, "_itunes_art", slow)
+        monkeypatch.setattr(rec_mod, "ART_SECONDS", 0.05, raising=False)
+        track = await asyncio.wait_for(rec.identify(np.zeros(SAMPLE_RATE, np.int16)), 1)   # no cover lookup in here
+        assert track.title == "T" and rec.reachable
+        assert await rec.art_for(track) == "http://x/shazam.jpg" and rec.reachable         # iTunes too slow: Shazam's
+        await rec.close()
+
+    asyncio.run(go())

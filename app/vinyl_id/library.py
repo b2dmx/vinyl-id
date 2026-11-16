@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import os
 import re
 import sqlite3
 import subprocess
@@ -17,6 +18,7 @@ MAX_HASHES_PER_SONG = 20000
 MIN_MATCH = 40          # aligned hashes needed to trust a local match
 MIN_RATIO = 2.0         # best match must beat the runner-up by this much
 LEFTOVER_DAYS = 30      # covers of removed albums are kept this long, then deleted
+COMPACT_BYTES = 4 * 1024 * 1024   # freed space is given back to the disk only when it is at least this much
 
 # How sure a measured track length is. A better one replaces a worse one, never the other way.
 Q_STOP = 1              # ended when the record stopped (the needle may have been lifted early)
@@ -56,9 +58,14 @@ CREATE TABLE IF NOT EXISTS hashes (
 """
 
 
+class NotAPicture(ValueError):
+    """The bytes could not be turned into a JPEG cover."""
+
+
 def as_jpeg(data: bytes) -> bytes:
     """Covers are stored and served as JPEG, the one format every display reads.
-    PNG, WebP and GIF are converted with ffmpeg; if that fails the image is kept as it is."""
+    PNG, WebP and GIF are converted with ffmpeg; one that cannot be converted is refused
+    (stored as it is, it would be served as a JPEG that no display can read)."""
     if data[:3] == b"\xff\xd8\xff":
         return data
     try:
@@ -66,9 +73,11 @@ def as_jpeg(data: bytes) -> bytes:
             ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-frames:v", "1",
              "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "3", "pipe:1"],
             input=data, capture_output=True, timeout=20)
-    except (OSError, subprocess.TimeoutExpired):
-        return data
-    return out.stdout if out.returncode == 0 and out.stdout[:3] == b"\xff\xd8\xff" else data
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise NotAPicture("That picture could not be converted. Save it as a JPEG and try again.") from exc
+    if out.returncode != 0 or out.stdout[:3] != b"\xff\xd8\xff":
+        raise NotAPicture("That picture could not be read. Try a JPEG or PNG file.")
+    return out.stdout
 
 
 def locked(fn):
@@ -131,17 +140,46 @@ class TrackMixin:
     def add_tracks(self, album_id: int, mbid: str, tracks: list[dict]) -> None:
         """Store (replace) an album's track list. Links to songs already learned, and lengths
         measured or typed, are kept by title."""
-        old = {_norm(r["title"]): r for r in self.db.execute(
-            "SELECT title, song_id, measured, measured_q, typed FROM tracks WHERE album_id=?", (album_id,))}
-        self.db.execute("DELETE FROM tracks WHERE album_id=?", (album_id,))
-        for t in tracks:
-            was = old.get(_norm(t["title"]))
-            self.db.execute(
-                "INSERT INTO tracks (album_id, n, disc, side, pos, title, length, song_id, measured, measured_q, typed) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (album_id, t["n"], t.get("disc", 1), t["side"], t["pos"], t["title"], t.get("length"),
-                 *((was["song_id"], was["measured"], was["measured_q"], was["typed"]) if was else (None,) * 4)))
-        self.db.execute("UPDATE albums SET mbid=? WHERE id=?", (mbid, album_id))
+        rows = self.db.execute(
+            "SELECT title, song_id, measured, measured_q, typed FROM tracks WHERE album_id=?", (album_id,)).fetchall()
+        titles = [t.get("title") or "" for t in tracks]
+        # The same spelling first. "Battle (Day)" and "Battle (Night)" are one title once the
+        # brackets are dropped, so that looser form only counts where it can mean one track.
+        exact: dict[str, list[int]] = {}
+        for k, r in enumerate(rows):
+            exact.setdefault(r["title"].strip().casefold(), []).append(k)
+        loose_old = Counter(_norm(r["title"]) for r in rows)
+        loose_new = Counter(_norm(t) for t in titles)
+        loose = {_norm(r["title"]): k for k, r in enumerate(rows)}
+        used: set[int] = set()
+
+        def before(title: str):
+            same = [k for k in exact.get(title.strip().casefold(), []) if k not in used]
+            key = _norm(title)
+            k = same[0] if same else (
+                loose[key] if key and loose_old[key] == 1 and loose_new[key] == 1 else None)
+            if k is None or k in used:
+                return None
+            used.add(k)                          # a song, or a length, belongs to one track only
+            return rows[k]
+
+        # two passes: every track that is spelled as before gets its own row first
+        was_of = {i: before(title) for i, title in enumerate(titles)
+                  if title.strip().casefold() in exact}
+        was_of |= {i: before(title) for i, title in enumerate(titles) if i not in was_of}
+        try:
+            self.db.execute("DELETE FROM tracks WHERE album_id=?", (album_id,))
+            for i, (t, title) in enumerate(zip(tracks, titles)):
+                was = was_of[i]
+                self.db.execute(
+                    "INSERT INTO tracks (album_id, n, disc, side, pos, title, length, song_id, measured, measured_q, typed) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (album_id, t["n"], t.get("disc", 1), t["side"], t["pos"], title, t.get("length"),
+                     *((was["song_id"], was["measured"], was["measured_q"], was["typed"]) if was else (None,) * 4)))
+            self.db.execute("UPDATE albums SET mbid=? WHERE id=?", (mbid, album_id))
+        except Exception:
+            self.db.rollback()                   # half a track list must not be saved by the next write
+            raise
         self.db.commit()
 
     @locked
@@ -171,7 +209,8 @@ class TrackMixin:
     @locked
     def set_measured(self, track_id: int, seconds: float, q: int) -> bool:
         """Keep a track length measured from playback. Returns whether it was kept: only when it
-        is plausible next to the listed length, and surer than the measurement already there."""
+        is plausible next to the listed length, and at least as sure as the measurement already
+        there (of two equally sure ones the newer counts, so a wrong one does not stay for good)."""
         r = self.db.execute("SELECT length, measured, measured_q FROM tracks WHERE id=?", (track_id,)).fetchone()
         if not r or seconds < 3:
             return False
@@ -181,7 +220,7 @@ class TrackMixin:
         if r["measured"] is not None:
             had = r["measured_q"] or 0
             # a stop can only cut a track short, so of two such measurements the longer is right
-            if q < had or (q == had and not (q == Q_STOP and seconds > r["measured"])):
+            if q < had or (q == had == Q_STOP and seconds <= r["measured"]):
                 return False
         self.db.execute("UPDATE tracks SET measured=?, measured_q=? WHERE id=?", (round(seconds, 1), q, track_id))
         self.db.commit()
@@ -348,11 +387,16 @@ class Library(TrackMixin):
         return self.db.execute("SELECT COUNT(*) FROM songs").fetchone()[0]
 
     @locked
-    def compact(self) -> None:
-        """Give freed space back to the disk (after songs were forgotten)."""
+    def compact(self) -> bool:
+        """Give freed space back to the disk (after songs were forgotten). Only when there is
+        enough of it to be worth it: this holds the library for as long as it takes."""
         self.db.commit()
+        free = self.db.execute("PRAGMA freelist_count").fetchone()[0]
+        if free * self.db.execute("PRAGMA page_size").fetchone()[0] < COMPACT_BYTES:
+            return False
         self.db.execute("VACUUM")
         self._size = (0.0, 0)
+        return True
 
     def size_bytes(self) -> int:
         """Everything the library keeps on disk. Measured at most once a minute."""
@@ -502,10 +546,15 @@ class Library(TrackMixin):
         self.db.commit()
 
     def set_art(self, album_id: int, data: bytes, locked: bool) -> None:
-        data = as_jpeg(data)            # before taking the lock: converting can take seconds
+        try:
+            data = as_jpeg(data)        # before taking the lock: converting can take seconds
+        except NotAPicture:
+            if locked:                  # a cover you chose: you are told
+                raise
+            return                      # one fetched by itself: the album just stays without
         name = f"{album_id}.jpg"
         with self.lock:
-            (self.art_dir / name).write_bytes(data)
+            self._write(self.art_dir / name, data)
             self.db.execute("UPDATE albums SET art_file=?, art_locked=? WHERE id=?", (name, int(locked), album_id))
             self.db.commit()
 
@@ -522,7 +571,18 @@ class Library(TrackMixin):
         return f"{album_id}-disc{disc}.jpg"
 
     def set_disc_art(self, album_id: int, disc: int, data: bytes) -> None:
-        (self.art_dir / self._disc_art_name(album_id, disc)).write_bytes(as_jpeg(data))
+        self._write(self.art_dir / self._disc_art_name(album_id, disc), as_jpeg(data))
+
+    @staticmethod
+    def _write(path: Path, data: bytes) -> None:
+        """Save a cover so that its version (see art_version) is never the one it had before."""
+        try:
+            before = path.stat().st_mtime_ns
+        except OSError:
+            before = 0
+        path.write_bytes(data)
+        if path.stat().st_mtime_ns // 1000 <= before // 1000:    # a coarse clock, or two saves at once
+            os.utime(path, ns=(before + 1000, before + 1000))
 
     def disc_art_file(self, album_id: int, disc: int) -> str | None:
         name = self._disc_art_name(album_id, disc)
@@ -537,13 +597,14 @@ class Library(TrackMixin):
 
     def art_version(self, art_file: str) -> int:
         """Changes only when the cover does, so displays re-download it only then."""
-        try:
-            return int((self.art_dir / art_file).stat().st_mtime)
+        try:     # microseconds: two changes within one second are still two versions
+            return (self.art_dir / art_file).stat().st_mtime_ns // 1000
         except OSError:
             return 0
 
     @locked
-    def forget(self, song_id: int) -> None:
+    def forget(self, song_id: int) -> bool:
+        """Returns whether there was such a song."""
         was = self.db.execute("SELECT album_id FROM songs WHERE id=?", (song_id,)).fetchone()
         self.db.execute("DELETE FROM hashes WHERE song_id=?", (song_id,))
         self.db.execute("DELETE FROM songs WHERE id=?", (song_id,))
@@ -551,6 +612,7 @@ class Library(TrackMixin):
         self.db.execute("UPDATE tracks SET song_id=NULL WHERE song_id=?", (song_id,))
         self._gc_album(was and was["album_id"])
         self.db.commit()
+        return was is not None
 
     def _gc_album(self, album_id: int | None, keep_fetched: bool = True) -> None:
         """A song just left this album: drop the album if it now has no songs and no track list.
@@ -616,14 +678,20 @@ class Library(TrackMixin):
         self.db.commit()
         return True
 
-    @locked
     def restore_leftover(self, leftover_id: int, album_id: int) -> bool:
         """Put a set-aside cover on an album: as that LP's cover if the album has such an LP,
         otherwise as the album cover."""
-        row = self.db.execute("SELECT id, file, disc FROM leftovers WHERE id=?", (leftover_id,)).fetchone()
         data = self.leftover_bytes(leftover_id)
+        if data is None:
+            return False
+        data = as_jpeg(data)    # before taking the lock, and before anything is moved: it can fail
+        with self.lock:
+            return self._restore_leftover(leftover_id, album_id, data)
+
+    def _restore_leftover(self, leftover_id: int, album_id: int, data: bytes) -> bool:
+        row = self.db.execute("SELECT id, file, disc FROM leftovers WHERE id=?", (leftover_id,)).fetchone()
         target = self.album(album_id)
-        if not row or data is None or target is None:
+        if not row or target is None:
             return False
         self._drop_leftover(row)
         # the cover it replaces is set aside in turn, so nothing is lost by a wrong pick

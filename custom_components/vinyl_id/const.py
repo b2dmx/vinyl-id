@@ -7,5 +7,6 @@ CONF_LISTENER = "listener"
 CONF_SOURCE_PLAYER = "source_player"
 CONF_SOURCE_NAME = "source_name"
 CONF_MONITOR = "monitor"
+CONF_HID = "hid_listener"            # kept with the entry: the listener we have hidden once
 DEFAULT_URL = "http://127.0.0.1:8780"   # the Vinyl ID app on the same machine as Home Assistant
 POLL_SECONDS = 2

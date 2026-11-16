@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+import voluptuous as vol
 from homeassistant.components.media_player import MediaPlayerEntityFeature as F
 from homeassistant.const import CONF_URL
 from homeassistant.data_entry_flow import FlowResultType
@@ -154,7 +155,17 @@ async def test_the_cover_is_fetched_from_the_address_home_assistant_uses(hass, a
     assert ent.media_image_url == f"{URL}/api/albums/1/art?v=7"
 
 
-async def test_a_line_in_under_another_name_is_found_and_configure_guesses_again(hass, aioclient_mock):
+def suggested(result):
+    out = {}
+    for k, v in result["data_schema"].schema.items():
+        if hasattr(v, "schema") and isinstance(getattr(v, "schema", None), vol.Schema):     # a section
+            out |= {i.schema: (i.description or {}).get("suggested_value") for i in v.schema.schema}
+        else:
+            out[k.schema] = (k.description or {}).get("suggested_value")
+    return out
+
+
+async def test_a_line_in_under_another_name_is_found_but_configure_does_not_guess(hass, aioclient_mock):
     from custom_components.vinyl_id.config_flow import _guess_player, _line_in
 
     hass.states.async_set("media_player.tv", "on", {"source_list": ["HDMI 1", "Netflix"]})
@@ -162,13 +173,178 @@ async def test_a_line_in_under_another_name_is_found_and_configure_guesses_again
     assert _guess_player(hass) == "media_player.streamer" and _line_in(["Queue", "Line-In"]) == "Line-In"
     hass.states.async_set("media_player.cast", "idle", {"source_list": ["Sendspin Source (CAST)"]})
     assert _guess_player(hass) == "media_player.cast"                         # the usual name wins
+    assert _guess_player(hass, never="media_player.cast") == "media_player.streamer"
 
     entry = await setup(hass, aioclient_mock, status())                       # set up with no line-in player
     r = await hass.config_entries.options.async_init(entry.entry_id)
-    suggested = {k.schema: (k.description or {}).get("suggested_value") for k in r["data_schema"].schema}
-    assert suggested["source_player"] == "media_player.cast"
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {})   # cleared again: nothing to look after
+    assert suggested(r)["source_player"] is None                              # left empty stays empty
+    r = await hass.config_entries.options.async_configure(r["flow_id"], {})
     assert r["type"] is FlowResultType.CREATE_ENTRY and r["data"] == {}
+
+
+async def test_the_guessed_line_in_player_is_never_the_speaker_itself(hass, aioclient_mock):
+    hass.states.async_set(SPEAKER, "idle", {"source_list": ["Wifi", "Line In"]})    # no Music Assistant here
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status())
+    r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    assert suggested(r)["source_player"] == SPEAKER                                 # all there is to guess
+    r = await hass.config_entries.flow.async_configure(
+        r["flow_id"], {CONF_URL: URL, CONF_SPEAKER: SPEAKER, "source_player": SPEAKER})
+    assert r["step_id"] == "line_in" and [k.schema for k in r["data_schema"].schema] == ["speaker_source"]
+    r = await hass.config_entries.flow.async_configure(r["flow_id"], {})
+    assert r["options"] == {CONF_SPEAKER: SPEAKER}
+
+
+async def test_the_saved_input_survives_a_speaker_that_cannot_list_its_inputs(hass, aioclient_mock):
+    hass.states.async_set(SPEAKER, "unavailable")
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status(playing=False))
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_URL: URL},
+                            options={CONF_SPEAKER: SPEAKER, "speaker_source": "Optical"})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    r = await hass.config_entries.options.async_init(entry.entry_id)
+    r = await hass.config_entries.options.async_configure(r["flow_id"], {CONF_SPEAKER: SPEAKER})
+    assert r["type"] is FlowResultType.CREATE_ENTRY                     # no second form: nothing to ask
+    assert r["data"] == {CONF_SPEAKER: SPEAKER, "speaker_source": "Optical"}
+
+    # ... also when the second form is shown, for the line-in, without that field
+    hass.states.async_set("media_player.cast", "idle", {"source_list": ["Line In"]})
+    r = await hass.config_entries.options.async_init(entry.entry_id)
+    r = await hass.config_entries.options.async_configure(
+        r["flow_id"], {CONF_SPEAKER: SPEAKER, "source_player": "media_player.cast"})
+    assert r["step_id"] == "line_in" and "speaker_source" not in suggested(r)
+    r = await hass.config_entries.options.async_configure(
+        r["flow_id"], {"source_name": "Line In", "listener": "media_player.ear", "advanced": {}})
+    assert r["data"]["speaker_source"] == "Optical"
+
+    # an input you emptied yourself is gone, and another speaker starts without one
+    hass.states.async_set(SPEAKER, "idle", {"source_list": ["Wifi", "Optical"]})
+    await hass.async_block_till_done()
+    r = await hass.config_entries.options.async_init(entry.entry_id)
+    r = await hass.config_entries.options.async_configure(r["flow_id"], {CONF_SPEAKER: SPEAKER})
+    assert suggested(r)["speaker_source"] == "Optical"
+    r = await hass.config_entries.options.async_configure(r["flow_id"], {})
+    assert r["data"] == {CONF_SPEAKER: SPEAKER, "listener": "media_player.ear"}
+
+
+async def test_the_monitor_is_guessed_once_and_stays_empty_when_emptied(hass, aioclient_mock):
+    hass.states.async_set("media_player.cast", "idle", {"source_list": ["Line In"]})
+    hass.states.async_set("select.cast_line_in_monitor", "Direct", {"options": ["Direct", "In sync"]})
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status(playing=False))
+    r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    r = await hass.config_entries.flow.async_configure(r["flow_id"], {CONF_URL: URL, "source_player": "media_player.cast"})
+    assert suggested(r)["monitor"] == "select.cast_line_in_monitor"          # first set-up: found for you
+    r = await hass.config_entries.flow.async_configure(
+        r["flow_id"], {"source_name": "Line In", "listener": "media_player.ear", "advanced": {}})   # ... and emptied
+    await hass.async_block_till_done()
+    entry = r["result"]
+    assert "monitor" not in entry.options
+    r = await hass.config_entries.options.async_init(entry.entry_id)
+    r = await hass.config_entries.options.async_configure(r["flow_id"], {"source_player": "media_player.cast"})
+    assert suggested(r)["monitor"] is None                                    # not filled in again
+
+
+async def test_a_listener_you_show_again_stays_shown(hass, aioclient_mock):
+    from homeassistant.helpers import entity_registry as er
+
+    reg = er.async_get(hass)
+    ear = reg.async_get_or_create("media_player", "music_assistant", "ear", suggested_object_id="ear").entity_id
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status(playing=False))
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_URL: URL}, options={"listener": ear})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert reg.async_get(ear).hidden_by is er.RegistryEntryHider.INTEGRATION
+    reg.async_update_entity(ear, hidden_by=None)                              # you want to see it
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert reg.async_get(ear).hidden_by is None
+
+
+async def test_of_two_players_with_the_listeners_name_music_assistants_is_it(hass, aioclient_mock):
+    from homeassistant.helpers import entity_registry as er
+
+    from custom_components.vinyl_id.config_flow import _find_listener
+
+    reg = er.async_get(hass)
+    reg.async_get_or_create("media_player", "sendspin", "ear", suggested_object_id="ear_other",
+                            original_name="Vinyl ID Listener")
+    ear = reg.async_get_or_create("media_player", "music_assistant", "ear", suggested_object_id="ear_ma",
+                                  original_name="Vinyl ID Listener").entity_id
+    assert _find_listener(hass, "Vinyl ID Listener") == ear and _find_listener(hass) == ear
+
+
+async def test_a_new_address_is_used_at_once_while_the_app_could_not_be_reached(hass, aioclient_mock):
+    from homeassistant.config_entries import ConfigEntryState
+
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", status=500)
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_URL: URL})
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    new = "http://moved.test:8780"
+    aioclient_mock.get(f"{new}/api/status?tracks=0", json=status())
+    r = await entry.start_reconfigure_flow(hass)
+    r = await hass.config_entries.flow.async_configure(r["flow_id"], {CONF_URL: new})
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+
+
+async def record_starts(hass, aioclient_mock, speaker_state, attrs):
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_mock_service
+
+    hass.states.async_set(SPEAKER, speaker_state, attrs)
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status(playing=False))
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_URL: URL},
+                            options={CONF_SPEAKER: SPEAKER, "speaker_source": "Optical"})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    select = async_mock_service(hass, "media_player", "select_source")
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status())
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=5))
+    await hass.async_block_till_done()
+    return entry, select
+
+
+async def test_a_speaker_that_was_away_is_switched_when_it_is_back(hass, aioclient_mock):
+    _, select = await record_starts(hass, aioclient_mock, "unavailable", {})
+    assert not select
+    hass.states.async_set(SPEAKER, "idle", {"source": "Wifi"})
+    await hass.async_block_till_done()
+    assert [c.data["source"] for c in select] == ["Optical"]
+    hass.states.async_set(SPEAKER, "playing", {"source": "Wifi"})               # you chose otherwise: yours now
+    await hass.async_block_till_done()
+    assert len(select) == 1
+
+
+async def test_a_speaker_that_was_off_is_asked_then_and_again_when_it_comes_on(hass, aioclient_mock):
+    _, select = await record_starts(hass, aioclient_mock, "off", {"source": "Wifi"})
+    assert len(select) == 1
+    hass.states.async_set(SPEAKER, "off", {"source": "Wifi", "volume_level": 0.2})
+    await hass.async_block_till_done()
+    assert len(select) == 1                                                     # not over and over while it is off
+    hass.states.async_set(SPEAKER, "idle", {"source": "Wifi"})
+    await hass.async_block_till_done()
+    assert len(select) == 2
+
+
+async def test_set_up_in_the_middle_of_a_record_switches_nothing(hass, aioclient_mock):
+    from pytest_homeassistant_custom_component.common import async_mock_service
+
+    hass.states.async_set(SPEAKER, "idle", {"source": "Wifi"})
+    select = async_mock_service(hass, "media_player", "select_source")
+    aioclient_mock.get(f"{URL}/api/status?tracks=0", json=status())             # already playing
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_URL: URL},
+                            options={CONF_SPEAKER: SPEAKER, "speaker_source": "Optical"})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    hass.states.async_set(SPEAKER, "playing", {"source": "Wifi"})
+    await hass.async_block_till_done()
+    assert not [c for c in select if c.data.get("source") == "Optical"]
 
 
 async def test_the_speaker_is_put_on_the_records_input_when_a_record_starts(hass, aioclient_mock):

@@ -58,6 +58,10 @@ class Router:
         self._again = False                      # something changed while a check was running
         self._later: CALLBACK_TYPE | None = None
         self._monitor_failed = 0.0               # when switching direct/in-sync last failed
+        self._slowed = -1.0                      # the attempt the wait was last made longer for
+        self._tried = False                      # an attempt went through, and nothing came of it yet
+        self._stopped = False                    # unloaded: nothing more is done
+        self._odd_monitor = False                # said once: the monitor's options are not understood
 
     @callback
     def start(self) -> list[CALLBACK_TYPE]:
@@ -65,8 +69,14 @@ class Router:
         return [
             async_track_state_change_event(self.hass, watch, self._changed),
             async_track_time_interval(self.hass, self._tick, CHECK_EVERY),
-            self._cancel_later,
+            self.stop,
         ]
+
+    @callback
+    def stop(self) -> None:
+        """Unloaded: a check still under way makes no further calls and books nothing."""
+        self._stopped = True
+        self._cancel_later()
 
     @callback
     def _cancel_later(self) -> None:
@@ -81,7 +91,8 @@ class Router:
             await self.check()
 
         self._cancel_later()
-        self._later = async_call_later(self.hass, seconds, run)
+        if not self._stopped:
+            self._later = async_call_later(self.hass, seconds, run)
 
     async def _changed(self, _event: Event) -> None:
         await self.check()
@@ -93,7 +104,25 @@ class Router:
         state = self.hass.states.get(entity_id)
         return None if state is None or state.state in GONE else state
 
+    def _slower(self) -> None:
+        """Wait longer before the next attempt (once per attempt, however it went wrong)."""
+        if self._slowed != self._last_try:
+            self._slowed = self._last_try
+            self._retry = min(self._retry * 2, RETRY_AT_MOST)
+
+    def _attempt(self) -> bool:
+        """Whether it is time to try again. An attempt that went through but changed nothing
+        counts like one that failed: the next one waits longer."""
+        if time.monotonic() - self._last_try < self._retry:
+            return False
+        if self._tried:
+            self._slower()
+        self._last_try, self._tried = time.monotonic(), False
+        return True
+
     async def check(self) -> None:
+        if self._stopped or self.hass.is_stopping:
+            return
         if self._busy:
             self._again = True                   # look again once the running check is done
             return
@@ -105,10 +134,10 @@ class Router:
                 if not self._again:
                     break
         except (HomeAssistantError, TimeoutError) as err:
-            self._retry = min(self._retry * 2, RETRY_AT_MOST)
+            self._slower()
             _LOGGER.warning("Could not reconnect the record (next try in %d s): %s", self._retry, str(err) or type(err).__name__)
         except Exception:  # noqa: BLE001  a failed call must not stop later checks
-            self._retry = min(self._retry * 2, RETRY_AT_MOST)
+            self._slower()
             _LOGGER.exception("Could not look after the record's path")
         finally:
             self._busy = False
@@ -129,25 +158,25 @@ class Router:
                 if idle_for < IDLE_FOR:
                     self._check_in(IDLE_FOR - idle_for + 1)
                     return
-            if time.monotonic() - self._last_try < self._retry:
+            if not self._attempt():
                 return
-            self._last_try = time.monotonic()
             _LOGGER.info("Reconnecting the record: %s -> %s", self.source, self.listener)
             if not (on_line_in and playing):
                 await self._call(MP_DOMAIN, "select_source", self.player, source=self.source)
             await self._call(MP_DOMAIN, "join", self.player, group_members=[self.listener])
+            self._tried = True
             return
 
         if self.hears_nothing():
             # Everything says "connected", yet the app gets no sound: after the app restarts, Music
             # Assistant can go on showing the old group while nothing flows. Join it again.
-            if time.monotonic() - self._last_try < self._retry:
+            if not self._attempt():
                 return
-            self._last_try = time.monotonic()
             _LOGGER.info("The app hears nothing although it shows as connected: joining %s again", self.listener)
             await self._call(MP_DOMAIN, "join", self.player, group_members=[self.listener])
+            self._tried = True
             return
-        self._retry = RETRY_AFTER                    # connected: the next drop is tried promptly again
+        self._retry, self._tried = RETRY_AFTER, False     # connected: the next drop is tried promptly again
         await self._set_monitor(others=[m for m in members if m not in (self.player, self.listener)])
 
     async def _set_monitor(self, others: list[str]) -> None:
@@ -156,7 +185,13 @@ class Router:
         options = (select.attributes.get("options") or []) if select else []
         if len(options) < 2:
             return
-        want = options[1] if others else options[0]   # by convention: direct first, in-sync second
+        want = self._monitor_option(options, in_sync=bool(others))
+        if want is None:
+            if not self._odd_monitor:
+                self._odd_monitor = True
+                _LOGGER.warning("%s is left alone: its options %s do not say which is direct and which is in sync",
+                                self.monitor, options)
+            return
         if select.state != want and time.monotonic() - self._monitor_failed >= RETRY_AFTER:
             _LOGGER.info("Line-in sound: %s (%d other speakers)", want, len(others))
             try:
@@ -165,6 +200,22 @@ class Router:
                 self._monitor_failed = time.monotonic()
                 _LOGGER.warning("Could not switch the line-in sound to %s: %s", want, str(err) or type(err).__name__)
 
+    @staticmethod
+    def _monitor_option(options: list[str], in_sync: bool) -> str | None:
+        """The option by its name. Two options of which one or none is named: direct first, in sync second."""
+        direct = next((o for o in options if "direct" in o.lower()), None)
+        sync = next((o for o in options if o != direct and ("music assistant" in o.lower() or "sync" in o.lower())), None)
+        if len(options) == 2:
+            if direct is None and sync is None:
+                direct, sync = options
+            elif direct is None:
+                direct = next(o for o in options if o != sync)
+            elif sync is None:
+                sync = next(o for o in options if o != direct)
+        return sync if in_sync else direct
+
     async def _call(self, domain: str, service: str, entity_id: str, **data) -> None:
+        if self._stopped or self.hass.is_stopping:
+            return
         async with asyncio.timeout(30):              # a call that never answers must not stop later checks
             await self.hass.services.async_call(domain, service, {ATTR_ENTITY_ID: entity_id, **data}, blocking=True)

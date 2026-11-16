@@ -11,7 +11,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .const import CONF_LISTENER, CONF_MONITOR, CONF_SOURCE_NAME, CONF_SOURCE_PLAYER
+from .const import CONF_HID, CONF_LISTENER, CONF_MONITOR, CONF_SOURCE_NAME, CONF_SOURCE_PLAYER
 from .coordinator import VinylCoordinator
 from .routing import Router
 
@@ -25,7 +25,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: VinylConfigEntry) -> boo
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     opts = entry.options
-    set_listener_hidden(hass, opts.get(CONF_LISTENER), True)
+    # Hidden once. If you show it again in Settings > Entities, it stays shown.
+    if (listener := opts.get(CONF_LISTENER)) and entry.data.get(CONF_HID) != listener:
+        if set_listener_hidden(hass, listener, True):
+            hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_HID: listener})
     if opts.get(CONF_SOURCE_PLAYER) and opts.get(CONF_SOURCE_NAME) and opts.get(CONF_LISTENER):
         router = Router(hass, opts[CONF_SOURCE_PLAYER], opts[CONF_SOURCE_NAME], opts[CONF_LISTENER],
                         opts.get(CONF_MONITOR), coordinator.hears_nothing)
@@ -45,19 +48,20 @@ async def async_remove_entry(hass: HomeAssistant, entry: VinylConfigEntry) -> No
     set_listener_hidden(hass, entry.options.get(CONF_LISTENER), False)
 
 
-def set_listener_hidden(hass: HomeAssistant, entity_id: str | None, hidden: bool) -> None:
+def set_listener_hidden(hass: HomeAssistant, entity_id: str | None, hidden: bool) -> bool:
     """Keep the silent speaker the app listens through out of dashboards and pickers.
 
     It stays in Settings > Entities and keeps working. Only our own hiding is ever undone:
-    an entity you hid yourself stays hidden.
+    an entity you hid yourself stays hidden. Returns whether the entity was found.
     """
     reg = er.async_get(hass)
     if not entity_id or (found := reg.async_get(entity_id)) is None:
-        return
+        return False
     if hidden and found.hidden_by is None:
         reg.async_update_entity(entity_id, hidden_by=er.RegistryEntryHider.INTEGRATION)
     elif not hidden and found.hidden_by is er.RegistryEntryHider.INTEGRATION:
         reg.async_update_entity(entity_id, hidden_by=None)
+    return True
 
 
 async def _reload(hass: HomeAssistant, entry: VinylConfigEntry) -> None:

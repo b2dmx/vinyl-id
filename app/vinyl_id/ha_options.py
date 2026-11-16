@@ -38,7 +38,8 @@ env = {
 m = mqtt_service()
 if m:
     env |= {"MQTT_HOST": m.get("host", ""), "MQTT_PORT": str(m.get("port", 1883)),
-            "MQTT_USER": m.get("username", ""), "MQTT_PASSWORD": m.get("password", "")}
+            "MQTT_USER": m.get("username", ""), "MQTT_PASSWORD": m.get("password", ""),
+            "MQTT_TLS": str(bool(m.get("ssl"))).lower()}
 
 for k, v in env.items():
     print(f"export {k}={shlex.quote(v)}")

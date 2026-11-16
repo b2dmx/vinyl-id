@@ -8,7 +8,7 @@ from typing import Any
 import aiohttp
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_URL
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import section
@@ -53,25 +53,28 @@ def _line_in(sources: list[str]) -> str | None:
     return None
 
 
-def _guess_player(hass: HomeAssistant) -> str | None:
-    """A player that has a line-in among its sources."""
+def _guess_player(hass: HomeAssistant, never: str | None = None) -> str | None:
+    """A player that has a line-in among its sources (`never`: the speaker you listen on)."""
     for wanted in LINE_IN_NAMES:
         for state in hass.states.async_all("media_player"):
-            if any(re.search(wanted, s.lower()) for s in state.attributes.get("source_list") or []):
+            if state.entity_id != never and any(re.search(wanted, s.lower()) for s in state.attributes.get("source_list") or []):
                 return state.entity_id
     return None
 
 
 def _find_listener(hass: HomeAssistant, name: str = "") -> str | None:
-    """The app's silent speaker: by the name the app gives, else by "Vinyl ID..."."""
+    """The app's silent speaker: by the name the app gives, else by "Vinyl ID...".
+    When several players have that name, the one from Music Assistant is it."""
+    found: list[er.RegistryEntry] = []
     for e in er.async_get(hass).entities.values():
         if e.domain != "media_player" or e.platform == DOMAIN:
             continue
         state = hass.states.get(e.entity_id)      # entities named after their device have no name of their own
         have = (e.name or e.original_name or (state.name if state else "")).lower()
         if have == name.lower() if name else have.startswith("vinyl id"):
-            return e.entity_id
-    return None
+            found.append(e)
+    found.sort(key=lambda e: e.platform != "music_assistant")
+    return found[0].entity_id if found else None
 
 
 def _guess_switch(hass: HomeAssistant) -> str | None:
@@ -92,6 +95,9 @@ class _LineInStep:
 
     def _line_in_form(self, step_id: str, old: dict[str, Any]):
         fields: dict[Any, Any] = {}
+        # Guessed only when a line-in is connected for the first time: afterwards the form shows
+        # what was saved, and what you emptied stays empty.
+        first = not old.get(CONF_SOURCE_PLAYER)
         if inputs := _sources(self.hass, self._picked.get(CONF_SPEAKER)):
             kept = old.get(CONF_SPEAKER_SOURCE) if old.get(CONF_SPEAKER) == self._picked[CONF_SPEAKER] else None
             fields[_field(CONF_SPEAKER_SOURCE, kept)] = selector.SelectSelector(selector.SelectSelectorConfig(
@@ -108,16 +114,21 @@ class _LineInStep:
                 _field(CONF_LISTENER, old.get(CONF_LISTENER) or _find_listener(self.hass, self._listener_name),
                        required=True): PLAYER,
                 vol.Required(ADVANCED): section(
-                    vol.Schema({_field(CONF_MONITOR, old.get(CONF_MONITOR) or _guess_switch(self.hass)): SWITCH}),
+                    vol.Schema({_field(CONF_MONITOR, _guess_switch(self.hass) if first else old.get(CONF_MONITOR)): SWITCH}),
                     {"collapsed": True}),
             }
         return self.async_show_form(step_id=step_id, data_schema=vol.Schema(fields))  # type: ignore[attr-defined]
 
-    def _options(self, line_in: dict[str, Any] | None) -> dict[str, Any]:
+    def _options(self, line_in: dict[str, Any] | None, old: dict[str, Any] | None = None) -> dict[str, Any]:
         opts = {k: v for k, v in self._picked.items() if v}
-        line_in = line_in or {}
+        line_in, old = line_in or {}, old or {}
         if line_in.get(CONF_SPEAKER_SOURCE):
             opts[CONF_SPEAKER_SOURCE] = line_in[CONF_SPEAKER_SOURCE]
+        elif (old.get(CONF_SPEAKER_SOURCE) and opts.get(CONF_SPEAKER) == old.get(CONF_SPEAKER)
+              and not _sources(self.hass, opts.get(CONF_SPEAKER))):
+            # The same speaker, but it cannot list its inputs right now (switched off, not loaded
+            # yet): the question was never asked, so the answer given before still stands.
+            opts[CONF_SPEAKER_SOURCE] = old[CONF_SPEAKER_SOURCE]
         if opts.get(CONF_SOURCE_PLAYER) and line_in.get(CONF_SOURCE_NAME):
             opts |= {CONF_SOURCE_NAME: line_in[CONF_SOURCE_NAME], CONF_LISTENER: line_in[CONF_LISTENER]}
             if switch := (line_in.get(ADVANCED) or {}).get(CONF_MONITOR):
@@ -133,6 +144,7 @@ class VinylConfigFlow(_LineInStep, ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._url = ""
         self._picked = {}
+        self._guess: str | None = None      # the line-in player the form filled in by itself
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -145,14 +157,18 @@ class VinylConfigFlow(_LineInStep, ConfigFlow, domain=DOMAIN):
             else:
                 self._url, self._listener_name = url, str(status.get("listener") or "")
                 self._picked = {k: user_input.get(k) for k in (CONF_SPEAKER, CONF_SOURCE_PLAYER)}
+                if self._picked[CONF_SOURCE_PLAYER] == self._guess == self._picked[CONF_SPEAKER]:
+                    self._picked[CONF_SOURCE_PLAYER] = None     # our guess was the speaker itself: no line-in player
                 if self._needs_second_form():
                     return await self.async_step_line_in()
                 return self.async_create_entry(title="Vinyl ID", data={CONF_URL: url}, options=self._options(None))
         given = user_input or {}
+        if user_input is None:
+            self._guess = _guess_player(self.hass)
         schema = vol.Schema({
             vol.Required(CONF_URL, default=given.get(CONF_URL, DEFAULT_URL)): str,
             _field(CONF_SPEAKER, given.get(CONF_SPEAKER)): PLAYER,
-            _field(CONF_SOURCE_PLAYER, given.get(CONF_SOURCE_PLAYER) or _guess_player(self.hass)): PLAYER,
+            _field(CONF_SOURCE_PLAYER, given.get(CONF_SOURCE_PLAYER) or self._guess): PLAYER,
         })
         return self.async_show_form(step_id="user", errors=errors, data_schema=schema)
 
@@ -172,8 +188,10 @@ class VinylConfigFlow(_LineInStep, ConfigFlow, domain=DOMAIN):
             except (aiohttp.ClientError, TimeoutError, ValueError):
                 errors["base"] = "cannot_connect"
             else:
-                # the entry's update listener reloads it
+                # the entry's update listener reloads it; an entry still waiting for the app has none yet
                 self.hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_URL: url})
+                if entry.state is not ConfigEntryState.LOADED:
+                    self.hass.config_entries.async_schedule_reload(entry.entry_id)
                 return self.async_abort(reason="reconfigure_successful")
         schema = vol.Schema({vol.Required(CONF_URL, default=entry.data[CONF_URL]): str})
         return self.async_show_form(
@@ -199,8 +217,8 @@ class VinylOptionsFlow(_LineInStep, OptionsFlow):
             return self._save(None)
         schema = vol.Schema({
             _field(CONF_SPEAKER, old.get(CONF_SPEAKER)): PLAYER,
-            # what is still empty is guessed again: the line-in player may not have existed at set-up
-            _field(CONF_SOURCE_PLAYER, old.get(CONF_SOURCE_PLAYER) or _guess_player(self.hass)): PLAYER,
+            # as saved: a field you emptied is not filled in again
+            _field(CONF_SOURCE_PLAYER, old.get(CONF_SOURCE_PLAYER)): PLAYER,
         })
         return self.async_show_form(step_id="init", data_schema=schema)
 
@@ -210,7 +228,8 @@ class VinylOptionsFlow(_LineInStep, OptionsFlow):
         return self._save(user_input)
 
     def _save(self, line_in: dict[str, Any] | None) -> ConfigFlowResult:
-        new, old = self._options(line_in), self.config_entry.options.get(CONF_LISTENER)
+        new = self._options(line_in, dict(self.config_entry.options))
+        old = self.config_entry.options.get(CONF_LISTENER)
         if CONF_LISTENER not in new and old:
             new[CONF_LISTENER] = old                      # still the app's speaker, still kept off dashboards
         if old != new.get(CONF_LISTENER):                 # no longer the listener: show it again

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import io
+import ipaddress
 import logging
 import re
 import time
 import wave
 from dataclasses import dataclass
+from urllib.parse import urljoin, urlsplit
 
 import aiohttp
 import numpy as np
@@ -18,6 +20,8 @@ from .config import SAMPLE_RATE, VERSION
 
 log = logging.getLogger(__name__)
 MAX_IMAGE_BYTES = 10 * 1024 * 1024   # a cover larger than this is not downloaded
+ART_SECONDS = 4                      # how long a cover lookup may hold up showing the song
+MAX_REDIRECTS = 5
 _STOP = {"a", "an", "and", "the", "of", "in", "on", "to", "for", "at", "by", "is", "it"}   # MusicBrainz ignores these
 
 
@@ -73,6 +77,19 @@ def parse_release(data: dict) -> dict:
     }
 
 
+async def is_public(url: str) -> bool:
+    """Whether a web address leads out to the internet: http(s), and every address its name
+    stands for is a public one (not this machine, the home network or Home Assistant's own)."""
+    parts = urlsplit(url)
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        return False
+    try:
+        found = await asyncio.get_running_loop().getaddrinfo(parts.hostname, None)
+        return bool(found) and all(ipaddress.ip_address(f[4][0].split("%")[0]).is_global for f in found)
+    except (OSError, ValueError):
+        return False
+
+
 def _wav(pcm: np.ndarray) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
@@ -124,8 +141,16 @@ class Recognizer:
             art_url=images.get("coverarthq") or images.get("coverart") or "",
             shazam_id=str(t.get("key", "")),
         )
-        track.art_url = await self._itunes_art(track) or track.art_url
         return track
+
+    async def art_for(self, track: Track) -> str:
+        """Where the song's cover is: the album's from iTunes if that answers soon, else Shazam's."""
+        try:
+            found = await asyncio.wait_for(self._itunes_art(track), ART_SECONDS)
+        except Exception as exc:               # too slow, or no answer: Shazam's own will do
+            log.info("No cover from iTunes (%s)", type(exc).__name__)
+            found = ""
+        return found or track.art_url
 
     def _session(self) -> aiohttp.ClientSession:
         if self._http is None:
@@ -133,18 +158,29 @@ class Recognizer:
         return self._http
 
     async def fetch(self, url: str) -> bytes | None:
-        """An image from the web, or None. Never more than MAX_IMAGE_BYTES."""
+        """An image from the web, or None. Never more than MAX_IMAGE_BYTES, and only from the
+        internet: an address on this machine or the home network is not fetched, also not when
+        a web address forwards there."""
         try:
-            async with self._session().get(url) as r:
-                if r.status != 200:
+            for _hop in range(MAX_REDIRECTS + 1):
+                if not await is_public(url):
+                    log.warning("Art download refused: %s is not an address on the internet", url)
                     return None
-                data = bytearray()
-                async for chunk in r.content.iter_chunked(65536):
-                    data += chunk
-                    if len(data) > MAX_IMAGE_BYTES:
-                        log.warning("Art download stopped: larger than %d MB", MAX_IMAGE_BYTES >> 20)
+                async with self._session().get(url, allow_redirects=False) as r:
+                    if r.status in (301, 302, 303, 307, 308) and r.headers.get("Location"):
+                        url = urljoin(url, r.headers["Location"])
+                        continue
+                    if r.status != 200:
                         return None
-                return bytes(data)
+                    data = bytearray()
+                    async for chunk in r.content.iter_chunked(65536):
+                        data += chunk
+                        if len(data) > MAX_IMAGE_BYTES:
+                            log.warning("Art download stopped: larger than %d MB", MAX_IMAGE_BYTES >> 20)
+                            return None
+                    return bytes(data)
+            log.warning("Art download stopped: forwarded too many times")
+            return None
         except Exception as exc:
             log.warning("Art download failed: %s", exc)
             return None

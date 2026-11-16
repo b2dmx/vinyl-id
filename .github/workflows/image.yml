@@ -2,12 +2,16 @@ name: Image
 
 # Builds the app's image for both kinds of machine and puts it on GitHub's registry, so
 # Home Assistant downloads it ready-made instead of building it on the user's device.
-# Runs whenever the app changes on main (and by hand), for the version in app/config.yaml.
-# Home Assistant offers an update as soon as that version changes, so the image must follow at once.
+#
+# Home Assistant offers an update the moment the version in app/config.yaml changes on main,
+# so the image has to be there first. A release therefore goes to the branch `next`: the
+# tests run, the image for that version is built, and only then is main moved up to it.
+# A version that already has its image is never built again (the same version is always the
+# same code); on main that image is only given the tag `latest`.
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
     paths: ["app/**"]
   workflow_dispatch:
 
@@ -16,15 +20,29 @@ permissions:
   packages: write
 
 jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install pytest pytest-asyncio numpy aiohttp "paho-mqtt>=2.1,<3" shazamio==0.9.0
+      - run: pytest -q
+
   image:
+    needs: tests
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false          # one machine's build failing must not stop the other's
       matrix:
         include:
           - arch: aarch64
             platform: linux/arm64
           - arch: amd64
             platform: linux/amd64
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/vinyl-id-${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v5
       - id: version
@@ -36,17 +54,27 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - id: have
+        run: |
+          if docker manifest inspect "$IMAGE:${{ steps.version.outputs.version }}" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$IMAGE:${{ steps.version.outputs.version }} is there already: not built again"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.have.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
         with:
           context: app
           platforms: ${{ matrix.platform }}
           push: true
           provenance: false
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/vinyl-id-${{ matrix.arch }}:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/vinyl-id-${{ matrix.arch }}:latest
+          tags: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
           labels: |
             io.hass.version=${{ steps.version.outputs.version }}
             io.hass.arch=${{ matrix.arch }}
             io.hass.type=addon
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
+      # `latest` (what docker-compose.yml uses) follows main only
+      - if: github.ref == 'refs/heads/main'
+        run: docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:${{ steps.version.outputs.version }}"

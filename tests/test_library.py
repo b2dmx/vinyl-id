@@ -48,8 +48,8 @@ def test_forget_and_album_art(tmp_path):
     sid, needs_art = lib.upsert("A", "B", "C", "x1")
     assert needs_art
     album_id = lib.song(sid).album_id
-    lib.set_art(album_id, b"jpg", locked=True)
-    assert lib.art_bytes(album_id) == b"jpg"
+    lib.set_art(album_id, b"\xff\xd8\xffjpg", locked=True)
+    assert lib.art_bytes(album_id) == b"\xff\xd8\xffjpg"
     sid2, needs_art2 = lib.upsert("A2", "b", "c", "x2")   # same album, different case
     assert lib.song(sid2).album_id == album_id and not needs_art2
     lib.forget(sid)
@@ -237,7 +237,8 @@ def test_measured_lengths_and_what_replaces_what(tmp_path):
     assert not lib.set_measured(one, 20, Q_GAP)              # a fifth of the listed length: a false gap
     assert not lib.set_measured(one, 170, Q_GAP)             # far longer: two songs taken for one
     assert lib.set_measured(one, 92.04, Q_HEARD)
-    assert not lib.set_measured(one, 80, Q_HEARD)            # no surer than what is there
+    assert lib.set_measured(one, 80, Q_HEARD)                # as sure as what is there: the newer one counts
+    assert lib.set_measured(one, 92.04, Q_HEARD)
     assert not lib.set_measured(one, 80, Q_STOP)
     assert lib.set_measured(one, 91, Q_GAP)                  # surer: replaces it
     assert lib.set_measured(two, 40, Q_STOP) and lib.set_measured(two, 55, Q_STOP)   # of two stops, the longer
@@ -278,3 +279,76 @@ def test_teaching_what_shazam_calls_a_track(tmp_path):
     assert lib.shazam_song("shz-other-name") == own
     lib.forget(own)
     assert lib.shazam_song("shz-other-name") is None
+
+
+def test_picking_the_pressing_again_keeps_bracket_twins_apart(tmp_path):
+    from vinyl_id.library import Q_GAP
+
+    lib = Library(tmp_path)
+    tracks = [{"n": 1, "side": "A", "pos": 1, "title": "Battle (Day)"},
+              {"n": 2, "side": "A", "pos": 2, "title": "Battle (Night)"},
+              {"n": 3, "side": "A", "pos": 3, "title": "Home"}]
+    album = lib.add_album_from_release("Band", "LP", "mb", tracks)
+    day, night, home = (t["id"] for t in lib.album_tracks(album))
+    songs = [lib.song_for_track(t) for t in (day, night, home)]
+    lib.set_measured(day, 270, Q_GAP)
+    lib.set_track_lengths(album, {"A2": 70})
+    lib.set_measured(home, 100, Q_GAP)
+
+    again = [tracks[0], tracks[1], {"n": 3, "side": "A", "pos": 3, "title": "Home (Remastered)"},
+             {"n": 4, "side": "A", "pos": 4, "title": None}]            # a title MusicBrainz left out
+    lib.add_tracks(album, "mb2", again)
+    got = lib.album_tracks(album)
+    assert [(t["length"], t["source"]) for t in got] == [(270, "measured"), (70, "typed"), (100, "measured"), (None, None)]
+    assert [t["song_id"] for t in got] == [*songs, None] and got[3]["title"] == ""
+
+    # titles that differ only in brackets, and neither spelled as before: nothing is guessed
+    lib.add_tracks(album, "mb3", [{"n": 1, "side": "A", "pos": 1, "title": "Battle [Dawn]"},
+                                  {"n": 2, "side": "A", "pos": 2, "title": "Battle [Dusk]"}])
+    assert [t["song_id"] for t in lib.album_tracks(album)] == [None, None]
+
+
+def test_a_track_list_that_cannot_be_saved_changes_nothing(tmp_path):
+    import pytest
+
+    lib = Library(tmp_path)
+    tracks = [{"n": 1, "side": "A", "pos": 1, "title": "One", "length": 100}]
+    album = lib.add_album_from_release("Band", "LP", "mb", tracks)
+    sid = lib.song_for_track(lib.album_tracks(album)[0]["id"])
+    with pytest.raises(KeyError):
+        lib.add_tracks(album, "mb2", [{"n": 1, "side": "A", "pos": 1, "title": "Other"}, {"n": 2, "title": "No side"}])
+    lib.played(sid)                                         # the next write must not save half of it
+    assert [(t["title"], t["song_id"]) for t in lib.album_tracks(album)] == [("One", sid)]
+
+
+def test_space_is_only_given_back_when_it_is_worth_it(tmp_path):
+    lib = Library(tmp_path)
+    sid, _ = lib.upsert("T", "A", "Al", "id1")
+    assert lib.forget(sid) and not lib.forget(sid)          # the second time there was no such song
+    assert lib.compact() is False                           # next to nothing to free: the library is not held up
+    lib.db.execute("CREATE TABLE filler (x BLOB)")
+    lib.db.execute("INSERT INTO filler VALUES (zeroblob(6000000))")
+    lib.db.execute("DROP TABLE filler")
+    assert lib.compact() is True
+
+
+def test_a_cover_that_is_no_picture_is_refused(tmp_path):
+    import pytest
+
+    from vinyl_id.library import NotAPicture
+
+    lib = Library(tmp_path)
+    album = lib.add_album("Band", "LP")
+    with pytest.raises(NotAPicture):
+        lib.set_art(album, b"GIF8 and then nothing a picture is made of", locked=True)
+    assert lib.art_bytes(album) is None and not lib.album_has_art(album)
+
+
+def test_a_cover_changed_twice_in_a_second_is_two_versions(tmp_path):
+    lib = Library(tmp_path)
+    album = lib.add_album("Band", "LP")
+    seen = set()
+    for n in range(5):
+        lib.set_art(album, b"\xff\xd8\xff" + bytes([n]), locked=True)
+        seen.add(lib.art_version(f"{album}.jpg"))
+    assert len(seen) == 5

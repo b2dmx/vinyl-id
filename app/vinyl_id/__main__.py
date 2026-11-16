@@ -22,7 +22,7 @@ import numpy as np
 from . import web
 from .audio import ffmpeg_blocks, level_db
 from .calibrate import Calibrator
-from .config import AI_NOTE, APP_NAME, BLOCK_SECONDS, DEFAULT_THRESHOLD_DB, SIGNATURE, Settings
+from .config import AI_NOTE, APP_NAME, BLOCK_SECONDS, DEFAULT_THRESHOLD_DB, SAMPLE_RATE, SIGNATURE, Settings
 from .detector import Detector, Event
 from .fingerprint import FRAMES_PER_SECOND, hashes
 from .library import Library
@@ -33,6 +33,7 @@ from .spin import EXPIRE_AFTER, LENGTH_GRACE, LONG_QUIET, Spin
 
 log = logging.getLogger("vinyl_id")
 FRAMES_PER_BLOCK = BLOCK_SECONDS * FRAMES_PER_SECOND
+BLOCK_SAMPLES = int(SAMPLE_RATE * BLOCK_SECONDS)
 MAX_LEARN_BLOCKS = int(300 / BLOCK_SECONDS)   # 5 min of unconfirmed audio at most
 TAIL_TRIM_BLOCKS = int(3 / BLOCK_SECONDS)     # drop the last 3 s before a gap
 RECENT_BLOCKS = int(90 / BLOCK_SECONDS)       # audio kept for labelling an unknown song
@@ -80,11 +81,13 @@ class App:
         self.rejected: int | None = None       # the song you said this is not (until the next song)
         self._compact_due = False              # songs were forgotten while a record played: tidy up after it
         self._labelled_at = -1e9               # when a song was last named by hand
-        self._counted: int | None = None       # the song whose play was counted last
+        self._counted: set[int] = set()        # the songs whose play was counted since the record started
         self._found_at = -1e9                  # when the song on screen was last recognized
         self._marked_at = 0.0                  # when the current song began (as far as is known)
         self._unkept = 0                       # blocks not kept for learning (the 5-minute limit)
         self.timer = TrackTimer()              # measures the followed album's track lengths
+        self._held_back: tuple | None = None   # audio kept back until a gap shows its track ended on time
+        self._tails: set[asyncio.Task] = set() # last parts of songs being checked before they are learned
 
     # --- the quiet level (signal threshold), set from the page ---------------------
     @property
@@ -159,16 +162,24 @@ class App:
         self.learn_blocks, self.learn_start, self._unkept = [], self.block_i, 0
 
     def _count_play(self, song_id: int) -> None:
-        """Once per song: a late gap, a re-sync or a second look at the same song is not a new play."""
-        if song_id != self._counted:
-            self._counted = song_id
+        """Once per song and side: a late gap, a re-sync, or the title moving on early and back
+        again is not a new play."""
+        if song_id not in self._counted:
+            self._counted.add(song_id)
             self.lib.played(song_id)
 
     def _commit_learning(self, trim_tail: bool = False, extra_trim: float = 0.0,
-                         ended: float | None = None, confirmed: bool = False) -> None:
+                         ended: float | None = None, confirmed: bool = False,
+                         upto: int | None = None, hold: bool = False) -> None:
         """Add confirmed audio to the current song's fingerprint.
         ended: when the song stopped (a gap, or the record stopping). confirmed: recognition
-        has just named this very song."""
+        has just named this very song, in a clip that ended at block `upto`; what was heard
+        after that is not confirmed yet and stays. hold: the track list moved on by the clock
+        while there was reason to doubt it; the audio is kept back until a gap bears it out."""
+        rest: list[np.ndarray] = []
+        if upto is not None and not self._unkept and 0 < upto - self.learn_start < len(self.learn_blocks):
+            k = upto - self.learn_start
+            self.learn_blocks, rest = self.learn_blocks[:k], self.learn_blocks[k:]
         cut = (TAIL_TRIM_BLOCKS if trim_tail else 0) + int(extra_trim / BLOCK_SECONDS)
         cut = max(0, cut - self._unkept)     # what was not kept is already "trimmed"
         blocks = self.learn_blocks[:-cut] if cut else self.learn_blocks
@@ -185,17 +196,49 @@ class App:
         unplaced = self.spin is not None and self.spin.start is None and not self.start_exact
         if (self.s.learn and self.current is not None and not doubted and not unplaced
                 and len(blocks) * BLOCK_SECONDS >= 5):
-            self._learn(self.current, np.concatenate(blocks), self._rel(self.learn_start))
+            what = (self.current, np.concatenate(blocks), self._rel(self.learn_start))
+            if confirmed or (self.spin is not None and not hold):
+                self._learn(*what)
+            elif self.spin is not None:
+                self._held_back = what
+            else:
+                # No track list says where this song ends, and it may have run into the next one
+                # since recognition last heard it: ask about its last seconds before keeping them.
+                task = asyncio.create_task(self._learn_tail(*what, np.concatenate(blocks[-self.buf.maxlen:])))
+                self._tails.add(task)
+                task.add_done_callback(self._tails.discard)
         self._reset_learning()
+        if rest:
+            self.learn_blocks, self.learn_start = rest, upto
 
-    def _record_stopped(self, lost: bool = False) -> None:
-        """lost: the audio input went away (the record itself may still be turning)."""
+    async def _learn_tail(self, song_id: int, pcm: np.ndarray, t0: int, clip: np.ndarray) -> None:
+        """Learn the last part of a song (heard after recognition's last look) if its end is
+        still recognized as that song."""
+        try:
+            hit = await asyncio.to_thread(self.lib.match, await asyncio.to_thread(hashes, clip))
+            if hit:
+                same = hit[0] == song_id
+            else:
+                track = await asyncio.wait_for(self.rec.identify(clip), SHAZAM_TIMEOUT)
+                same = bool(track and track.shazam_id) and self.lib.shazam_song(track.shazam_id) == song_id
+            if same:
+                self._learn(song_id, pcm, t0)
+        except asyncio.TimeoutError:
+            pass
+        except Exception:
+            log.exception("Checking the last part of a song failed")
+
+    def _record_stopped(self, lost: bool = False, dropout: bool = False) -> None:
+        """lost: the audio input went away (the record itself may still be turning).
+        dropout: the same, noticed as a long stretch of exact silence."""
         # A stop is heard only after stop_seconds of quiet: that stretch is the run-out groove, not the song
-        self._commit_learning(trim_tail=True, extra_trim=0.0 if lost else self.s.stop_seconds,
-                              ended=self.clock() - (0.0 if lost else self.s.stop_seconds))
+        quiet = 0.0 if lost else self.s.stop_seconds
+        lost = lost or dropout
+        self._commit_learning(trim_tail=True, extra_trim=quiet, ended=self.clock() - quiet)
+        self._held_back = None
         self.next_check, self.current, self.unknown = None, None, False
         if not lost:
-            self._counted = None
+            self._counted.clear()
         self.epoch += 1
         if self.spin:
             self._keep(self.timer.stopped(self.spin, self.clock(), self.s.stop_seconds, lost))
@@ -237,7 +280,10 @@ class App:
             else:
                 self._idle.append(db)
             if self._auto_quiet:
-                found = self.cal.feed(db, self.det.playing, self.current is not None)
+                # a song named by its place on the album alone does not show that a record is playing
+                named = self.current is not None and (
+                    self.current_source != "spin" or self._found_at >= self._marked_at)
+                found = self.cal.feed(db, self.det.playing, named)
                 if found is not None:
                     was_playing = self.det.playing
                     self._set_quiet_level(found, "by itself")
@@ -261,6 +307,7 @@ class App:
             if ev is Event.STARTED:
                 log.info("Record started")
                 self.pub.playing(True)
+                self._held_back = None
                 self._reset_learning()
                 self._clear_recent()
                 self._mark_start()
@@ -272,12 +319,22 @@ class App:
                         self._save_spin()
                     else:
                         self._spin_sync()
-                        if how in ("new", "flip"):       # a needle drop at the top of a side
+                        if how in ("new", "flip") and not self.spin.guessed:   # a needle drop at the top of a side
                             self.timer.begin(self.spin.cur["id"], self.clock() - self.s.start_seconds)
+                self._schedule(self.s.settle_seconds, quick=True)
+            elif ev is Event.TRACK_CHANGE and self.spin and self.spin.flip_again(self.clock()):
+                log.info("The needle came down: %s%s starts here", self.spin.cur["side"], self.spin.cur["pos"])
+                self._held_back = None
+                self._reset_learning()
+                self._clear_recent()
+                self._mark_start()
+                self.timer.begin(self.spin.cur["id"], self.clock())
+                self._spin_sync()
                 self._schedule(self.s.settle_seconds, quick=True)
             elif ev is Event.TRACK_CHANGE and self.spin and (early := self.spin.early_gap(self.clock())):
                 # the title stays; but listen again, in case the record really is somewhere else
                 log.info("Quiet passage, not a gap: this track should run another %d s", early)
+                self.spin.held = True            # ... or the track is shorter on this pressing: not known yet
                 if self.det.last_dip >= LONG_QUIET:
                     self.spin.sure = False       # long enough to have changed the record
                 self._schedule(self.s.settle_seconds, quick=True)
@@ -285,15 +342,19 @@ class App:
                 log.info("Track change detected")
                 if self.spin and self.spin.flip_held(self.clock()):
                     self.spin.guessed = False    # so what was heard of it may be learned
-                if self.spin and not self.spin.sure and not self.spin.guessed and self.spin.fits(self.clock()):
+                if (self.spin and not self.spin.sure and not self.spin.guessed and self.spin.mismatch is None
+                        and self.spin.fits(self.clock())):
                     log.info("%s%s ended on time: the place on the record is sure again",
                              self.spin.cur["side"], self.spin.cur["pos"])
                     self.spin.sure = True
                 if self.spin and self.spin.late_gap(self.clock()):
+                    if self._held_back:          # the gap came where the length said: it was that track
+                        self._learn(*self._held_back)
                     self._reset_learning()       # heard since the track moved on: the previous song's tail
                 else:                            # the quiet of the gap itself is not part of the song
                     self._commit_learning(trim_tail=True, extra_trim=max(0.0, self.det.last_dip - 3),
                                           ended=self.clock())
+                self._held_back = None
                 if self.spin and self.det.last_dip >= LONG_QUIET:
                     self.spin.sure = False       # long enough to have turned or changed the record
                 self._clear_recent()
@@ -312,13 +373,16 @@ class App:
                     self.current = None
                 self._schedule(self.s.settle_seconds, quick=True)
             elif ev is Event.STOPPED:
-                log.info("Record stopped")
-                self._record_stopped()
+                log.info("Record stopped (the sound dropped out)" if self.det.stop_lost else "Record stopped")
+                self._record_stopped(dropout=self.det.stop_lost)
 
+            # A gap held as a quiet passage, or another name from Shazam: the track may not be what
+            # the list says, and running out its listed length does not show that it is.
+            doubt = bool(self.spin and (self.spin.held or self.spin.named_otherwise))
             if self.spin and self.det.playing and not self.det.in_dip and self.spin.tick(self.clock()):
                 # songs running together: the listed length ran out before a gap was heard
                 # (never in a quiet stretch: that is a gap, or the side has ended)
-                self._commit_learning(trim_tail=True, extra_trim=LENGTH_GRACE)
+                self._commit_learning(trim_tail=True, extra_trim=LENGTH_GRACE, hold=doubt)
                 self._clear_recent()
                 self._keep(self.timer.moved_on())
                 self._spin_sync()
@@ -384,8 +448,8 @@ class App:
                 if song_id is None:
                     song_id, needs_art = self.lib.upsert(track.title, track.artist, track.album, track.shazam_id)
                     song = self.lib.song(song_id)
-                    if needs_art and track.art_url and song and song.album_id:
-                        if data := await self.rec.fetch(track.art_url):
+                    if needs_art and song and song.album_id and (art := await self.rec.art_for(track)):
+                        if data := await self.rec.fetch(art):
                             await asyncio.to_thread(self.lib.set_art, song.album_id, data, False)
                 source = "shazam"
                 pos = track.offset
@@ -404,7 +468,8 @@ class App:
             self._found_at = self.clock()
             if song_id == self.current:
                 moved = self._apply_position(pos, clip_start) if not self.start_exact else False
-                self._commit_learning(confirmed=True)         # confirmed: keep what we heard
+                # confirmed: keep what was heard, up to the end of the clip that was recognized
+                self._commit_learning(confirmed=True, upto=clip_start + len(pcm) // BLOCK_SAMPLES)
                 if moved:
                     self.refresh_now()
             else:
@@ -433,7 +498,7 @@ class App:
         Returns the song id to use, or None when it isn't on the spun album."""
         song = self.lib.song(song_id)
         if song is None:
-            return song_id
+            return None                         # forgotten while it was being looked up
         if self.spin:
             tr = self.lib.track_in_album(self.spin.album_id, song_id)
             if tr is None:
@@ -552,7 +617,8 @@ class App:
                 self._spin_file.write_text(json.dumps(
                     {"album_id": self.spin.album_id, "track_id": self.spin.cur["id"],
                      "saved": time.time() - max(0.0, idle),
-                     "auto": self.spin.auto, "side_ended": self.spin.at_side_end}))
+                     "auto": self.spin.auto, "side_ended": self.spin.at_side_end,
+                     "fresh": self.spin.fresh}))
             else:
                 self._spin_file.unlink(missing_ok=True)
         except OSError as exc:
@@ -568,6 +634,9 @@ class App:
         except (OSError, ValueError, KeyError, TypeError, AttributeError, StopIteration):
             return None
         spin = Spin(saved["album_id"], tracks, i, auto=bool(saved.get("auto")))
+        spin.fresh = bool(saved.get("fresh"))
+        if spin.fresh:
+            return spin                    # picked with the needle up: the first start is a needle drop
         # the next start resumes this track (position unknown); the time since counts as stopped time
         spin.stopped_at = self.clock() - max(0.0, time.time() - saved["saved"])
         spin.at_side_end = bool(saved.get("side_ended"))
@@ -590,6 +659,7 @@ class App:
             log.info("Learned: what was found as %s is %s%s", self.spin.cur["title"], tracks[i]["side"], tracks[i]["pos"])
             tracks = self.lib.album_tracks(album_id)
         self.spin = Spin(album_id, tracks, i)
+        self.spin.fresh = not self.det.playing
         self.timer.reset()
         self._save_spin()
         if self.det.playing:                    # needle is already down: position unknown until the next gap
@@ -663,7 +733,7 @@ class App:
         song_id = self.lib.add_song(album_id, title, artist)
         if wrong is not None and self.lib.fold_into(wrong, song_id):
             self.rejected = None          # found under that name again, it is now this song
-            self._counted = song_id       # ... and its play just now was this song's play
+            self._counted.add(song_id)    # ... and its play just now was this song's play
         self.spin = None                  # you said what it is: stop following the album
         self._save_spin()
         if self.s.learn and len(self.recent) * BLOCK_SECONDS >= 5:
@@ -752,12 +822,17 @@ class App:
         self.refresh_now()
 
     def forget(self, song_id: int) -> None:
-        self.lib.forget(song_id)
+        if not self.lib.forget(song_id):
+            return                        # no such song: nothing changed
         if self.det.playing:              # giving the space back holds the library for a moment:
             self._compact_due = True      # not while a record plays
         else:
             self._bg(self.lib.compact)    # so a full library can learn again
         self.pub.library(self.lib.size())
+        if self.busy and self.det.playing:
+            # a lookup under way may be about to name this very song: its answer is dropped
+            self.epoch += 1
+            self.next_check = self.clock()
         if song_id == self.current:
             self.current = None
             self._reset_learning()

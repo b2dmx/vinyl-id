@@ -143,3 +143,77 @@ async def test_connected_on_paper_but_the_app_hears_nothing(hass):
     await router.check()
     await router.check()                                          # and not again at once
     assert len(join) == 1 and join[0].data["group_members"] == [EAR]
+
+
+async def test_calls_that_go_through_but_change_nothing_are_made_less_and_less(hass, monkeypatch):
+    cast(hass, state="idle", source="Queue", members=())           # stays idle whatever is asked
+    hass.states.async_set(EAR, "idle")
+    join = async_mock_service(hass, "media_player", "join")
+    async_mock_service(hass, "media_player", "select_source")
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(routing.time, "monotonic", lambda: clock["t"])
+    router = Router(hass, CAST, LINE_IN, EAR, None)
+    waits = []
+    for _ in range(4):
+        await router.check()
+        waits.append(router._retry)
+        clock["t"] += router._retry + 1
+    assert len(join) == 4 and waits == [45.0, 90.0, 180.0, 360.0]
+    cast(hass)                                                     # it worked at last
+    await router.check()
+    assert router._retry == routing.RETRY_AFTER
+
+
+async def test_the_app_hearing_nothing_for_good_is_not_rejoined_every_minute(hass, monkeypatch):
+    cast(hass)
+    hass.states.async_set(EAR, "playing")
+    join = async_mock_service(hass, "media_player", "join")
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(routing.time, "monotonic", lambda: clock["t"])
+    router = Router(hass, CAST, LINE_IN, EAR, None, lambda: True)
+    for _ in range(20):                                            # twenty minutes of ticks
+        await router.check()
+        clock["t"] += 60
+    assert len(join) <= 5
+
+
+async def test_the_monitor_is_set_by_what_its_options_are_called(hass):
+    pick = Router._monitor_option
+    named = ["Off", "Direct (no delay)", "Through Music Assistant (in sync)"]
+    assert pick(named, in_sync=False) == named[1] and pick(named, in_sync=True) == named[2]
+    assert pick(["In sync", "Direct"], in_sync=True) == "In sync" and pick(["In sync", "Direct"], in_sync=False) == "Direct"
+    assert pick(["Local", "Network"], in_sync=False) == "Local" and pick(["Local", "Network"], in_sync=True) == "Network"
+    assert pick(["Direct", "Network"], in_sync=True) == "Network"
+    assert pick(["A", "B", "C"], in_sync=True) is None and pick(["A", "B", "C"], in_sync=False) is None
+
+    cast(hass, members=(CAST, EAR, KITCHEN))
+    hass.states.async_set(EAR, "idle")
+    hass.states.async_set(MONITOR, "A", {"options": ["A", "B", "C"]})
+    option = async_mock_service(hass, "select", "select_option")
+    await Router(hass, CAST, LINE_IN, EAR, MONITOR).check()
+    assert not option                                              # not understood: left alone
+
+
+async def test_nothing_more_is_done_after_unloading_or_while_stopping(hass):
+    cast(hass, state="idle", source="Queue", members=())
+    hass.states.async_set(EAR, "idle")
+    join = async_mock_service(hass, "media_player", "join")
+    seen = []
+
+    async def select(call):                                        # unloaded while this call is under way
+        seen.append(1)
+        router.stop()
+
+    hass.services.async_register("media_player", "select_source", select)
+    router = Router(hass, CAST, LINE_IN, EAR, None)
+    await router.check()
+    assert seen == [1] and not join                                # the join that would follow is not made
+    router._check_in(5)
+    assert router._later is None
+    await router.check()
+    assert seen == [1]
+
+    other = Router(hass, CAST, LINE_IN, EAR, None)
+    hass.set_state(__import__("homeassistant.core", fromlist=["CoreState"]).CoreState.stopping)
+    await other.check()
+    assert seen == [1] and not join

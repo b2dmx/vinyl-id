@@ -68,7 +68,7 @@ The song should appear within about 10 to 15 seconds on the page and on the **Re
 
 The Stream address, the listener's name, **Also allow edits from** and **Library size limit** are optional settings: on the app's Configuration tab, switch on **Show unused optional configuration options** to see them.
 
-**On a NAS or server instead of Home Assistant OS:** download [`docker-compose.yml`](docker-compose.yml), look through it (the defaults work; MQTT is optional), then run `docker compose up -d` next to it. The library page is at `http://<that machine>:8780`, and that is also the address to give the integration. Anyone on your network can open the page and, unless you set `EDIT_FROM`, change your library.
+**On a NAS or server instead of Home Assistant OS:** download [`docker-compose.yml`](docker-compose.yml), look through it (the defaults work; MQTT is optional), then run `docker compose up -d` next to it. The library page is at `http://<that machine>:8780`, and that is also the address to give the integration. Anyone on your network can open the page and, unless you set `EDIT_FROM` (addresses or ranges), change your library.
 
 ## Which entity is which
 
@@ -100,7 +100,7 @@ Open the Vinyl ID page.
 
 - **Quiet level** (the signal threshold): the level of your turntable when it is on but not playing. Vinyl ID finds it by itself and raises it if the hum gets louder; it never lowers it by itself, so use the button at the bottom of the page (turntable on, needle up) after making your set-up quieter. A record starts once the sound is 12 dB above it, and a gap between songs is sound that falls back to it. A number typed on the app's Configuration tab is used as it is, and switches the automatic finding off.
 - **Learn my records** is on by default. Turn it off to always use Shazam.
-- The library can only be changed from the Vinyl ID page in Home Assistant. To let a script or another computer change it too, list its address under **Also allow edits from**. Anyone on your network can view the page and play the stream; only changes are restricted.
+- The library can only be changed from the Vinyl ID page in Home Assistant. To let a script or another computer change it too, list its address (or a range, like `192.168.1.0/24`) under **Also allow edits from**. A page of another website open in your browser can never change it. Anyone on your network can view the page and play the stream; only changes are restricted.
 - Covers you set are never replaced automatically.
 - `http://<home assistant>:8780/stream.mp3` is the record as a stream that names its songs, for a player that should show the title itself. It runs a few seconds behind the record.
 - Space: a cover is about 50-150 KB and a learned song about 0.2 MB, so 1,000 songs is roughly 250 MB. The page shows the current size. **Library size limit** stops learning at a size you choose; songs already learned keep working.
@@ -124,6 +124,6 @@ The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.12.2 by Goobis<br>
+  Vinyl ID v0.12.3 by Goobis<br>
   AI was used to help develop this application
 </p>

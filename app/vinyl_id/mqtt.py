@@ -24,6 +24,8 @@ class Publisher:
         self.c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="vinyl-id")
         if s.mqtt_user:
             self.c.username_pw_set(s.mqtt_user, s.mqtt_password)
+        if s.mqtt_tls:
+            self.c.tls_set()
         self.c.will_set(f"{self.t}/status", "offline", retain=True)
         self.c.on_connect = self._on_connect
         self.c.on_message = self._on_message

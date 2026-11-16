@@ -17,7 +17,7 @@ from homeassistant.components.media_player import (
     MediaPlayerState,
     MediaType,
 )
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_SUPPORTED_FEATURES, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_SUPPORTED_FEATURES, STATE_OFF, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -53,6 +53,8 @@ class RecordPlayer(CoordinatorEntity[VinylCoordinator], MediaPlayerEntity):
         self._speaker: str | None = entry.options.get(CONF_SPEAKER)
         self._speaker_source: str | None = entry.options.get(CONF_SPEAKER_SOURCE)
         self._was_playing = bool((coordinator.data or {}).get("playing"))
+        self._input_due = False     # this record started and the speaker is not on its input yet
+        self._sent_while_off = False
         self._attr_unique_id = entry.entry_id
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)}, name="Record Player", manufacturer="Goobis",
@@ -66,20 +68,35 @@ class RecordPlayer(CoordinatorEntity[VinylCoordinator], MediaPlayerEntity):
 
     @callback
     def _speaker_changed(self, _event: Event[EventStateChangedData]) -> None:
+        if self._input_due:
+            self.hass.async_create_task(self._to_record_input())      # it was away or off when the needle dropped
         self.async_write_ha_state()
 
     @callback
     def _handle_coordinator_update(self) -> None:
         playing = bool((self.coordinator.data or {}).get("playing"))
         if playing and not self._was_playing and self._speaker_source:
+            self._input_due, self._sent_while_off = True, False
             self.hass.async_create_task(self._to_record_input())      # the needle dropped
+        elif not playing:
+            self._input_due = False
         self._was_playing = playing
         super()._handle_coordinator_update()
 
     async def _to_record_input(self) -> None:
-        """Put the speaker on the input the record comes in on, so nobody has to."""
+        """Put the speaker on the input the record comes in on, so nobody has to. Once per
+        record: after that the input is yours. A speaker that is away is switched when it is
+        back; one that is off is asked now and, if that did nothing, again when it comes on."""
         state = self._speaker_state
-        if state is None or state.attributes.get("source") == self._speaker_source:
+        if not self._input_due or state is None:
+            return
+        if state.state == STATE_OFF:
+            if self._sent_while_off:
+                return
+            self._sent_while_off = True
+        else:
+            self._input_due = False
+        if state.attributes.get("source") == self._speaker_source:
             return
         try:
             await self.hass.services.async_call(

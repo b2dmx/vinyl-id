@@ -31,7 +31,7 @@ configuration:
     name: Also allow edits from
     description: >-
       Normally the library can only be changed from the Vinyl ID page in Home Assistant.
-      To let a script or another computer change it too, list their IP addresses here, separated by commas.
+      To let a script or another computer change it too, list their IP addresses (or ranges, like 192.168.1.0/24) here, separated by commas.
   max_library_mb:
     name: Library size limit (MB)
     description: >-

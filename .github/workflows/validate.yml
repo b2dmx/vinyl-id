@@ -39,3 +39,11 @@ jobs:
           python-version: "3.14"
       - run: pip install pytest-homeassistant-custom-component
       - run: pytest -q -c tests_ha/pytest.ini tests_ha
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: hacs/action@main
+        with:
+          category: integration
+          ignore: brands        # the icon is served from this repository, not from home-assistant/brands

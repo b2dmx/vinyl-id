@@ -24,8 +24,10 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 META_EVERY = 16000   # bytes of audio between two metadata blocks (about 0.4 s)
 MAX_LISTENERS = 4    # each listener is its own encoder; a player normally opens one
+MAX_PER_CLIENT = 2   # ... so one device cannot take every place
 WRITE_SECONDS = 15   # a player that takes nothing for this long is gone
 _listeners = 0
+_by_client: dict[str, int] = {}
 
 
 def icy_block(title: str, url: str = "") -> bytes:
@@ -39,13 +41,18 @@ def icy_block(title: str, url: str = "") -> bytes:
 
 async def record_stream(req: web.Request, app: App) -> web.StreamResponse:
     global _listeners
-    if _listeners >= MAX_LISTENERS:
+    who = req.remote or ""
+    if _listeners >= MAX_LISTENERS or _by_client.get(who, 0) >= MAX_PER_CLIENT:
         raise web.HTTPServiceUnavailable(text="Too many listeners on the record stream")
     _listeners += 1
+    _by_client[who] = _by_client.get(who, 0) + 1
     try:
         return await _serve(req, app)
     finally:
         _listeners -= 1
+        _by_client[who] -= 1
+        if not _by_client[who]:
+            del _by_client[who]
 
 
 async def _serve(req: web.Request, app: App) -> web.StreamResponse:

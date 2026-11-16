@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import logging
+import os
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from aiohttp import web
 from aiohttp.web_log import AccessLogger
 
 from .config import AI_NOTE, SIGNATURE
+from .library import NotAPicture
+from .recognize import is_public
 from .stream import record_stream
 
 if TYPE_CHECKING:
@@ -20,6 +25,32 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 UI_DIR = Path(__file__).parent / "ui"
+INGRESS = "172.30.32.2"   # where Home Assistant's sidebar page comes from, on Home Assistant OS
+MAX_SEARCHES = 3     # searches (MusicBrainz, covers) under way at once; more are turned away
+
+
+def networks(edit_from: str) -> list:
+    """'192.168.1.20, 192.168.1.0/24' -> the networks those are. What is not an address is left out."""
+    out = []
+    for part in edit_from.split(","):
+        try:
+            out.append(ipaddress.ip_network(part.strip(), strict=False))
+        except ValueError:
+            if part.strip():
+                log.warning("Edits: %r is not an address or a range, so it allows nobody", part.strip())
+    return out
+
+
+def from_another_site(req: web.Request) -> bool:
+    """A page of another website is making this request (the browser says so). The page itself,
+    Home Assistant, and tools that are not browsers never look like this."""
+    if req.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
+        return True
+    origin = req.headers.get("Origin", "")
+    if not origin:
+        return False
+    here = {h.strip().lower() for h in (req.headers.get("Host", ""), req.headers.get("X-Forwarded-Host", "")) if h}
+    return urlsplit(origin).netloc.lower() not in here
 
 
 def is_image(data: bytes | None) -> bool:
@@ -144,15 +175,24 @@ def build(app: App) -> web.Application:
                 url = str(b["url"])
                 if not url.lower().startswith(("http://", "https://")):
                     raise web.HTTPBadRequest(text="Not a web address")
+                if not await is_public(url):
+                    raise web.HTTPBadRequest(text="Vinyl ID only fetches covers from the internet. "
+                                                  "Save that picture and upload the file instead.")
                 data = await app.rec.fetch(url)
         if not is_image(data):        # also stops the picker being used to read other web addresses
             raise web.HTTPBadRequest(text="No image")
         return bytes(data)
 
+    async def save(fn, *args):
+        """In a thread: converting a PNG or WebP can take seconds, and the audio loop must keep running."""
+        try:
+            return await asyncio.to_thread(fn, *args)
+        except NotAPicture as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from None
+
     @routes.post("/api/albums/{id:\\d+}/art")
     async def set_art(req):
-        # in a thread: converting a PNG or WebP can take seconds, and the audio loop must keep running
-        await asyncio.to_thread(lib.set_art, album_of(req), await image_from(req), True)
+        await save(lib.set_art, album_of(req), await image_from(req), True)
         app.refresh_now()
         return web.json_response({"ok": True})
 
@@ -181,7 +221,7 @@ def build(app: App) -> web.Application:
         album_id, disc = int(req.match_info["id"]), int(req.match_info["disc"])
         if not any(t["disc"] == disc for t in lib.album_tracks(album_id)):
             raise web.HTTPNotFound(text="That album has no such LP")
-        await asyncio.to_thread(lib.set_disc_art, album_id, disc, await image_from(req))
+        await save(lib.set_disc_art, album_id, disc, await image_from(req))
         app.refresh_now()
         return web.json_response({"ok": True})
 
@@ -200,7 +240,7 @@ def build(app: App) -> web.Application:
     @routes.post("/api/leftovers/{id:\\d+}/restore")
     async def restore_leftover(req):
         """{"album_id": ...}: put the cover on that album."""
-        if not lib.restore_leftover(int(req.match_info["id"]), int((await req.json())["album_id"])):
+        if not await save(lib.restore_leftover, int(req.match_info["id"]), int((await req.json())["album_id"])):
             raise web.HTTPNotFound(text="That cover or album is gone")
         app.refresh_now()
         return web.json_response({"ok": True})
@@ -211,14 +251,29 @@ def build(app: App) -> web.Application:
             raise web.HTTPNotFound()
         return web.json_response({"ok": True})
 
+    searching = 0
+
+    async def search(what):
+        """Searches wait their turn (MusicBrainz takes one a second): with several waiting
+        already, one more would only make yours time out."""
+        nonlocal searching
+        if searching >= MAX_SEARCHES:
+            what.close()
+            raise web.HTTPTooManyRequests(text="Too many searches at once. Try again in a moment.")
+        searching += 1
+        try:
+            return web.json_response(await what)
+        finally:
+            searching -= 1
+
     @routes.get("/api/art-search")
     async def art_search(req):
-        return web.json_response(await app.rec.search_art(req.query.get("q", "")))
+        return await search(app.rec.search_art(req.query.get("q", "")))
 
     @routes.get("/api/mb/search")
     async def mb_search(req):
         """Pressings from MusicBrainz, to pick the exact one (vinyl first)."""
-        return web.json_response(await app.rec.search_releases(req.query.get("q", "")))
+        return await search(app.rec.search_releases(req.query.get("q", "")))
 
     @routes.post("/api/albums/from-mb")
     async def album_from_mb(req):
@@ -239,7 +294,10 @@ def build(app: App) -> web.Application:
             app.tracks_changed(album_id)    # adding an album you already have replaces its track list
         if not lib.album_has_art(album_id):
             if data := await app.rec.front_cover(mbid):
-                await asyncio.to_thread(lib.set_art, album_id, data, False)
+                try:
+                    await asyncio.to_thread(lib.set_art, album_id, data, False)
+                except NotAPicture:      # the album is added all the same; a cover can be picked later
+                    log.warning("The cover MusicBrainz has for this release could not be read")
         return web.json_response({"id": album_id, "tracks": len(rel["tracks"])})
 
     @routes.get("/api/albums/{id:\\d+}/tracks")
@@ -305,13 +363,27 @@ def build(app: App) -> web.Application:
         except (KeyError, ValueError, TypeError, AttributeError, OverflowError) as exc:
             raise web.HTTPBadRequest(text=f"Bad request: {exc!r}") from exc
 
-    allowed = {ip.strip() for ip in app.s.edit_from.split(",") if ip.strip()}
+    via_ha = bool(os.environ.get("SUPERVISOR_TOKEN"))
+    allowed, limited = networks(app.s.edit_from), bool(app.s.edit_from.strip())
+
+    def may_edit(remote: str | None) -> bool:
+        try:
+            ip = ipaddress.ip_address((remote or "").split("%")[0])
+        except ValueError:
+            return False
+        ip = getattr(ip, "ipv4_mapped", None) or ip
+        return any(ip in net for net in allowed)
 
     @web.middleware
     async def edits_guard(req, handler):
-        """Covers stay readable on the LAN (for displays); changes only from allowed IPs."""
-        if allowed and req.method not in ("GET", "HEAD") and req.remote not in allowed:
-            raise web.HTTPForbidden(text="Changes only work from the Vinyl ID page inside Home Assistant (the sidebar, or Open Web UI on the app's page)")
+        """Covers stay readable on the LAN (for displays); changes only from allowed addresses,
+        and never from a page of another website the browser happens to have open."""
+        if req.method not in ("GET", "HEAD"):
+            # Home Assistant's own door (the sidebar page) has checked who is asking already
+            if not (via_ha and req.remote == INGRESS) and from_another_site(req):
+                raise web.HTTPForbidden(text="Changes only work from the Vinyl ID page itself")
+            if limited and not may_edit(req.remote):
+                raise web.HTTPForbidden(text="Changes only work from the Vinyl ID page inside Home Assistant (the sidebar, or Open Web UI on the app's page)")
         return await handler(req)
 
     @web.middleware
