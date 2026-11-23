@@ -73,7 +73,7 @@ The Stream address, the listener's name, **Also allow edits from** and **Library
 ## Which entity is which
 
 - **Record Player** (from the integration) is the one to look at and put on dashboards: song, cover, progress, and your speaker's volume.
-- Optional, off by default (turn on **Also publish MQTT entities** in the app's settings; needs the **Mosquitto broker** app and the MQTT integration), for automations and displays: **Record Playing**, **Now Playing**, **Album Art**, **Library Size**, **Input Level**, and a **Forget Current Song** button.
+- Optional, off by default (turn on **Also publish MQTT entities** in the app's settings; needs the **Mosquitto broker** app and the MQTT integration), for automations and displays: **Turntable Sound**, **Now Playing**, **Album Art**, **Library Size**, **Input Level**, and a **Forget Current Song** button.
 - **Vinyl ID Listener** is the silent speaker in Music Assistant. It says "playing" whenever the line-in is on, even with no record. The integration hides it from dashboards; it stays under Settings > Entities.
 
 ## Keeping the record connected
@@ -124,6 +124,6 @@ The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.13.0 by Goobis<br>
+  Vinyl ID v0.13.1 by Goobis<br>
   AI was used to help develop this application
 </p>

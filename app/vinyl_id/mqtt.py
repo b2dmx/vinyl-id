@@ -68,7 +68,7 @@ class Publisher:
         p, t = self.s.discovery_prefix, self.t
         entities = {
             f"{p}/binary_sensor/vinyl_id/playing/config": {
-                "name": "Record Playing", "unique_id": "vinyl_id_playing",
+                "name": "Turntable Sound", "unique_id": "vinyl_id_playing",
                 "device_class": "sound", "state_topic": f"{t}/playing", "icon": "mdi:album"},
             f"{p}/sensor/vinyl_id/now_playing/config": {
                 "name": "Now Playing", "unique_id": "vinyl_id_now_playing",

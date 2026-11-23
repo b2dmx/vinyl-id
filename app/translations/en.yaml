@@ -31,7 +31,7 @@ configuration:
     name: Also publish MQTT entities
     description: >-
       Off: the Vinyl ID integration's Record Player is the only thing in Home Assistant, which is all most
-      setups need. On: also publish Record Playing, Now Playing, Album Art, Library Size, Input Level and a
+      setups need. On: also publish Turntable Sound, Now Playing, Album Art, Library Size, Input Level and a
       Forget Current Song button through the Mosquitto broker app, for automations and displays that want them.
   edit_from:
     name: Also allow edits from
