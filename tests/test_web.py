@@ -66,6 +66,47 @@ def test_the_app_starts_without_an_mqtt_broker(tmp_path):
     assert "MQTT_HOST" not in out.stdout and "export RECEIVER_NAME='Vinyl ID Listener'" in out.stdout
 
 
+def test_mqtt_entities_only_when_asked_for(tmp_path):
+    """The integration shows the record; the broker is used only when 'Also publish MQTT entities' is on."""
+    import http.server
+    import json
+    import os
+    import pathlib
+    import subprocess
+    import sys
+    import threading
+
+    class Supervisor(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = json.dumps({"data": {"host": "broker", "port": 1883, "username": "u", "password": "p"}}).encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Supervisor)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    script = pathlib.Path(__file__).parent.parent / "app/vinyl_id/ha_options.py"
+    env = {**os.environ, "SUPERVISOR_TOKEN": "x", "SUPERVISOR_URL": f"http://127.0.0.1:{server.server_port}"}
+
+    def run(opts):
+        options = tmp_path / "options.json"
+        options.write_text(json.dumps(opts))
+        out = subprocess.run([sys.executable, str(script)], env={**env, "OPTIONS_FILE": str(options)},
+                             capture_output=True, text=True, timeout=60)
+        assert out.returncode == 0, out.stderr
+        return out.stdout
+
+    try:
+        assert "MQTT_HOST" not in run({})
+        assert "MQTT_HOST" not in run({"mqtt_entities": False})
+        assert "export MQTT_HOST=broker" in run({"mqtt_entities": True})
+    finally:
+        server.shutdown()
+
+
 def test_settings_left_empty_and_settings_that_are_no_number(monkeypatch):
     import pytest
 

@@ -80,7 +80,7 @@ class Publisher:
             f"{p}/sensor/vinyl_id/library/config": {
                 "name": "Library Size", "unique_id": "vinyl_id_library",
                 "state_topic": f"{t}/library", "unit_of_measurement": "songs",
-                "icon": "mdi:bookshelf"},
+                "entity_category": "diagnostic", "icon": "mdi:bookshelf"},
             f"{p}/button/vinyl_id/forget/config": {
                 "name": "Forget Current Song", "unique_id": "vinyl_id_forget",
                 "command_topic": f"{t}/forget", "icon": "mdi:delete-outline",

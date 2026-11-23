@@ -13,7 +13,7 @@ def mqtt_service() -> dict:
     token = os.environ.get("SUPERVISOR_TOKEN")
     if not token:
         return {}
-    req = urllib.request.Request("http://supervisor/services/mqtt",
+    req = urllib.request.Request(os.environ.get("SUPERVISOR_URL", "http://supervisor") + "/services/mqtt",
                                  headers={"Authorization": f"Bearer {token}"})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
@@ -35,7 +35,7 @@ env = {
     # edits only through the HA sidebar (ingress), plus any addresses you allow yourself
     "EDIT_FROM": ",".join(["172.30.32.2", "127.0.0.1", *(opts.get("edit_from") or "").replace(" ", "").split(",")]).strip(","),
 }
-m = mqtt_service()
+m = mqtt_service() if opts.get("mqtt_entities") else {}     # the integration shows the record; MQTT only when asked for
 if m:
     env |= {"MQTT_HOST": m.get("host", ""), "MQTT_PORT": str(m.get("port", 1883)),
             "MQTT_USER": m.get("username", ""), "MQTT_PASSWORD": m.get("password", ""),

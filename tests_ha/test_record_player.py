@@ -155,6 +155,12 @@ async def test_the_cover_is_fetched_from_the_address_home_assistant_uses(hass, a
     assert ent.media_image_url == f"{URL}/api/albums/1/art?v=7"
 
 
+async def test_the_apps_own_cover_link_is_an_attribute_for_displays(hass, aioclient_mock):
+    """Displays that fetch the cover themselves (the M-1) need the app's link, not Home Assistant's proxy."""
+    await setup(hass, aioclient_mock, status(art_url="http://192.168.1.50:8780/api/albums/1/art?v=7"))
+    assert hass.states.get(PLAYER).attributes["art_url"] == "http://192.168.1.50:8780/api/albums/1/art?v=7"
+
+
 def suggested(result):
     out = {}
     for k, v in result["data_schema"].schema.items():

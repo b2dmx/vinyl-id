@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 
 APP_NAME = "Vinyl ID"
-VERSION = "0.12.4"
+VERSION = "0.13.0"
 SIGNATURE = f"{APP_NAME} v{VERSION} by Goobis"
 AI_NOTE = "AI was used to help develop this application"
 

@@ -163,7 +163,8 @@ class RecordPlayer(CoordinatorEntity[VinylCoordinator], MediaPlayerEntity):
         now = self._now
         attrs = {"side": now.get("side"), "side_tracks": now.get("side_tracks"),
                  "album_tracks": now.get("album_tracks"), "identified_by": now.get("source"),
-                 "speaker": self._speaker}
+                 "speaker": self._speaker,
+                 "art_url": now.get("art_url")}     # the app's own link: for displays that fetch it themselves
         return {k: v for k, v in attrs.items() if v is not None}
 
     # --- the speaker ------------------------------------------------------------
