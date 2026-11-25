@@ -22,7 +22,7 @@ Vinyl ID listens to your record player and shows the song, artist, album and cov
 - **Identifies songs** with Shazam once, then from its own library.
 - **Learns your records**, so replays work offline.
 - **Shows the cover** in Home Assistant and on displays. A box set can have a cover for each LP.
-- **Follows an album.** Add it from MusicBrainz (tracks, sides, cover) and it knows the track, the side and where you are in it, flipping to side B on its own. It starts following by itself when it recognises a song from an album you added.
+- **Follows an album.** When it recognizes a song, it fetches the album's vinyl track list from MusicBrainz, so it knows the track, the side and where you are in it, flipping to side B on its own. You can also pick your exact pressing yourself.
 - **Keeps the record connected** after restarts, and plays it direct or in sync with other rooms (see below).
 
 ## What you need
@@ -86,11 +86,12 @@ To hear the record in more rooms, group those speakers onto the line-in player i
 
 Open the Vinyl ID page.
 
-- **Add an album** from MusicBrainz to get its tracks, sides and cover. Pick the entry that matches your record (LP, year, label).
+- **Track lists come by themselves.** The first time a song from a new album is recognized, Vinyl ID asks MusicBrainz (sending the artist and album name) for the usual vinyl pressing that has that song, usually within seconds. Albums MusicBrainz has no vinyl entry for are left without one, and have no progress bar.
+- **Add an album** from MusicBrainz to pick the entry that matches your record (LP, year, label): ahead of playing it, or to replace a fetched list that differs from your pressing.
 - **Now spinning:** choose an album and where the needle is, if Vinyl ID hasn't worked it out by itself.
 - **Not right?** on the playing song corrects it, and Vinyl ID learns the correction.
 - **Shazam knows a track by another name?** Soundtracks and reissues often do. While a record plays on with nothing longer than a gap between songs, Vinyl ID goes by the track's place on the album and learns it under the album's title, whatever Shazam calls it. Only after a flip, a stop or a long silence is it unsure again, until a track is recognized or ends on time. If it then asks, the page offers **It's A1, ...**: press it once and Vinyl ID knows that track from then on. If the wrong track of the album is shown, press the play button on the right one in the track list; that is remembered too.
-- **Quiet passages** in a song are not taken for the gap between two songs as long as the track's length says it is not nearly over. That is one more reason to add albums with their track lists.
+- **Quiet passages** in a song are not taken for the gap between two songs as long as the track's length says it is not nearly over. That is one more thing the track list is for.
 - **Change cover**, or give each LP of a box set its own.
 - **Track lengths** are measured as your record plays: from gap to gap, or from one recognized song to the next where songs run together. Until a track has been measured, the listed length (from MusicBrainz, often the CD's) stands in, shown with a ~. You can type a length yourself; it is then never replaced.
 - **Learned songs:** rename a song, or forget one that was learned wrongly.
@@ -124,6 +125,6 @@ The code is [MIT](LICENSE). The Vinyl ID logo and icons (everything in `assets/`
 
 <p align="center">
   <a href="LICENSE">MIT</a> · <a href="https://ko-fi.com/goobis2dmx">Support on Ko-fi</a><br><br>
-  Vinyl ID v0.13.1 by Goobis<br>
+  Vinyl ID v0.14.0 by Goobis<br>
   AI was used to help develop this application
 </p>

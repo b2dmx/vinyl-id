@@ -25,7 +25,7 @@ from .calibrate import Calibrator
 from .config import AI_NOTE, APP_NAME, BLOCK_SECONDS, DEFAULT_THRESHOLD_DB, SAMPLE_RATE, SIGNATURE, Settings
 from .detector import Detector, Event
 from .fingerprint import FRAMES_PER_SECOND, hashes
-from .library import Library
+from .library import Library, _norm, _same_artist
 from .measure import TrackTimer
 from .mqtt import Publisher
 from .recognize import Recognizer
@@ -38,6 +38,7 @@ MAX_LEARN_BLOCKS = int(300 / BLOCK_SECONDS)   # 5 min of unconfirmed audio at mo
 TAIL_TRIM_BLOCKS = int(3 / BLOCK_SECONDS)     # drop the last 3 s before a gap
 RECENT_BLOCKS = int(90 / BLOCK_SECONDS)       # audio kept for labelling an unknown song
 SHAZAM_TIMEOUT = 25                           # seconds; a lookup that hangs must not hold up the next one
+TRACKLIST_RETRY = 120                         # seconds before MusicBrainz is asked again after no answer
 
 
 class App:
@@ -88,6 +89,8 @@ class App:
         self.timer = TrackTimer()              # measures the followed album's track lengths
         self._held_back: tuple | None = None   # audio kept back until a gap shows its track ended on time
         self._tails: set[asyncio.Task] = set() # last parts of songs being checked before they are learned
+        self._tracklist_after: dict[int, float] = {}      # album -> when its track list may be asked for
+        self._tracklist_task: asyncio.Task | None = None  # the track list being fetched
 
     # --- the quiet level (signal threshold), set from the page ---------------------
     @property
@@ -484,6 +487,7 @@ class App:
                 self.pub.library(self.lib.size())
                 info = self.now_info() or {}
                 log.info("Now playing (%s): %s - %s", source, info.get("artist"), info.get("title"))
+            self._want_tracklist(song_id)
             self._schedule(self.s.recheck_seconds)
         except Exception:
             log.exception("Identifying failed; retrying in %.0f s", self.s.retry_seconds)
@@ -506,8 +510,9 @@ class App:
                     self.spin.named_otherwise = True
                     return None                 # the record has played on unbroken: it is still this album
                 seen = self.spin.mismatch
-                if self.spin.auto and not self.spin.trusted and seen and seen.get("id") == song_id:
-                    # the album was only a guess, and the same other song was heard twice: let go
+                if (self.spin.auto and not self.spin.trusted and seen and seen.get("id") == song_id) \
+                        or self._record_changed(song.artist, song.album, song_id):
+                    # the album was only a guess, or another record is on: let go
                     log.info("Not this album after all; following stopped")
                     self.spin = None
                     self._save_spin()
@@ -540,6 +545,68 @@ class App:
             self._save_spin()
         return song_id
 
+    def _record_changed(self, artist: str, album: str, key) -> bool:
+        """An album followed only because a song of it was recognized, not played on unbroken
+        since, and now a second song that is not from it: another record is on."""
+        sp = self.spin
+        seen = sp.mismatch if sp else None
+        if not sp or not seen or not sp.auto or sp.sure:
+            return False
+        mine = self.lib.album(sp.album_id) or {}
+        if not any(_same_artist(mine.get("artist", ""), a) for a in (artist, seen.get("artist", ""))):
+            return True                                    # two songs by someone else
+        return (key != (seen.get("key") or seen.get("id"))   # two different songs, both from other albums
+                and all(a and _norm(a) != _norm(mine.get("album", "")) for a in (album, seen.get("album", ""))))
+
+    # --- track lists fetched by themselves ------------------------------------------
+    def _want_tracklist(self, song_id: int) -> None:
+        """A song was recognized on an album that has no track list: fetch one, so the track,
+        the side and the progress are known without adding the album by hand."""
+        if self.spin or (self._tracklist_task and not self._tracklist_task.done()):
+            return
+        song = self.lib.song(song_id)
+        if not song or not song.album_id or not song.album or self.lib.album_tracks(song.album_id):
+            return
+        if self.clock() < self._tracklist_after.get(song.album_id, float("-inf")):
+            return
+        self._tracklist_task = asyncio.create_task(self._fetch_tracklist(song.album_id, song_id))
+
+    async def _fetch_tracklist(self, album_id: int, song_id: int) -> None:
+        try:
+            album, song = self.lib.album(album_id), self.lib.song(song_id)
+            if not album or not song:
+                return
+            self._tracklist_after[album_id] = self.clock() + TRACKLIST_RETRY
+            rel = await self.rec.vinyl_release(album["artist"], album["album"], song.title)
+            if rel is None:
+                return                                      # no answer: asked again later
+            self._tracklist_after[album_id] = float("inf")
+            if not rel:
+                log.info("MusicBrainz has no vinyl track list for %s - %s", album["artist"], album["album"])
+                return
+            if not self.lib.album(album_id) or self.lib.album_tracks(album_id):
+                return                                      # gone, or you added a list meanwhile
+            self.lib.add_tracks(album_id, rel["mbid"], rel["tracks"], fetched=True)
+            log.info("Track list fetched for %s - %s (%d tracks)", album["artist"], album["album"],
+                     len(rel["tracks"]))
+            self._follow(song_id)
+        except Exception:
+            log.exception("Fetching a track list failed")
+
+    def _follow(self, song_id: int) -> None:
+        """The song on screen has a track list now: start following its album straight away."""
+        if self.spin or not self.det.playing or self.current != song_id \
+                or self.current_source not in ("shazam", "local"):
+            return
+        found = self._reconcile(song_id)
+        if found is None or not self.spin:
+            return
+        self.current = found
+        if self.start_exact:                               # where in the song we are is already known
+            self._apply_position((self.block_i - self.song_start) * BLOCK_SECONDS, self.block_i)
+        self.refresh_now()
+        self._save_spin()
+
     def _place_is_sure(self) -> bool:
         """The album is not a mere guess, and the record has played on since its place was known:
         a title from outside the album is then no reason to doubt where the record is."""
@@ -554,6 +621,11 @@ class App:
             return False                        # Shazam only knows this track by another name
         key = track.shazam_id or f"{track.title}|{track.artist}"
         seen = self.spin.mismatch
+        if self._record_changed(track.artist, track.album, key):
+            log.info("Another record is on; following stopped")
+            self.spin = None
+            self._save_spin()
+            return True
         if seen and seen.get("key") == key:
             if not self.spin.auto or self.spin.trusted:
                 return False
@@ -824,6 +896,8 @@ class App:
     def forget(self, song_id: int) -> None:
         if not self.lib.forget(song_id):
             return                        # no such song: nothing changed
+        if self.spin and not self.lib.album_tracks(self.spin.album_id):
+            self.end_spin()               # it was the only song of an album fetched by mistake
         if self.det.playing:              # giving the space back holds the library for a moment:
             self._compact_due = True      # not while a record plays
         else:

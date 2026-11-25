@@ -9,6 +9,7 @@ import logging
 import re
 import time
 import wave
+from collections import Counter
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit
 
@@ -17,11 +18,14 @@ import numpy as np
 from shazamio import Shazam
 
 from .config import SAMPLE_RATE, VERSION
+from .library import _norm, _pick, _same_artist
 
 log = logging.getLogger(__name__)
 MAX_IMAGE_BYTES = 10 * 1024 * 1024   # a cover larger than this is not downloaded
 ART_SECONDS = 4                      # how long a cover lookup may hold up showing the song
 MAX_REDIRECTS = 5
+MB_BUSY_PAUSES = (2, 4)              # seconds waited before asking a busy MusicBrainz again
+MAX_PRESSINGS = 3                    # track lists read while looking for the one with the song heard
 _STOP = {"a", "an", "and", "the", "of", "in", "on", "to", "for", "at", "by", "is", "it"}   # MusicBrainz ignores these
 
 
@@ -75,6 +79,31 @@ def parse_release(data: dict) -> dict:
         "artist": _credit(data),
         "year": (data.get("date") or "")[:4], "tracks": tracks,
     }
+
+
+def _phrase(text: str) -> str:
+    """Words to be found together in a MusicBrainz search."""
+    return '"' + " ".join(re.sub(r'["\\]', " ", text).split()) + '"'
+
+
+def usual_pressings(releases: list[dict], artist: str, album: str) -> list[dict]:
+    """Of a MusicBrainz search's releases, the vinyl pressings of this album that are worth
+    reading, best first: one for each number of tracks, the number most pressings have
+    leading (the standard edition, not a box set or a one-off), and of those the oldest."""
+    found = []
+    for r in releases:
+        formats = [(m.get("format") or "").lower() for m in r.get("media") or []]
+        if (not formats or not all("vinyl" in f for f in formats)
+                or r.get("status") in ("Promotion", "Bootleg", "Pseudo-Release")
+                or _norm(r.get("title", "")) != _norm(album) or not _same_artist(_credit(r), artist)):
+            continue
+        found.append(r)
+    often = Counter(r.get("track-count", 0) for r in found)
+    found.sort(key=lambda r: (-often[r.get("track-count", 0)], r.get("date") or "9999"))
+    first: dict[int, dict] = {}
+    for r in found:
+        first.setdefault(r.get("track-count", 0), r)
+    return list(first.values())
 
 
 async def is_public(url: str) -> bool:
@@ -206,22 +235,25 @@ class Recognizer:
     async def _mb(self, path: str, params: dict) -> dict | None:
         """MusicBrainz allows one request per second and wants a descriptive User-Agent."""
         async with self._mb_lock:
-            wait = 1.1 - (time.monotonic() - self._mb_last)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            try:
-                async with self._session().get(
-                        f"https://musicbrainz.org/ws/2/{path}", params={**params, "fmt": "json"},
-                        headers={"User-Agent": f"VinylID/{VERSION} (https://github.com/b2dmx/vinyl-id)"}) as r:
-                    if r.status != 200:   # 503 = too many requests from this address
-                        log.warning("MusicBrainz answered %s for %s", r.status, path)
-                        return None
-                    return await r.json(content_type=None)
-            except Exception as exc:
-                log.warning("MusicBrainz lookup failed: %s", exc)
-                return None
-            finally:
-                self._mb_last = time.monotonic()
+            for pause in (*MB_BUSY_PAUSES, None):
+                wait = 1.1 - (time.monotonic() - self._mb_last)
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                try:
+                    async with self._session().get(
+                            f"https://musicbrainz.org/ws/2/{path}", params={**params, "fmt": "json"},
+                            headers={"User-Agent": f"VinylID/{VERSION} (https://github.com/b2dmx/vinyl-id)"}) as r:
+                        if r.status == 200:
+                            return await r.json(content_type=None)
+                        if r.status != 503 or pause is None:   # 503 = busy, or asked too often
+                            log.warning("MusicBrainz answered %s for %s", r.status, path)
+                            return None
+                except Exception as exc:
+                    log.warning("MusicBrainz lookup failed: %s", exc)
+                    return None
+                finally:
+                    self._mb_last = time.monotonic()
+                await asyncio.sleep(pause)
 
     async def search_releases(self, term: str) -> list[dict]:
         """Pressings matching a search, vinyl first, for the 'add album' picker."""
@@ -248,6 +280,25 @@ class Recognizer:
     async def release(self, mbid: str) -> dict | None:
         data = await self._mb(f"release/{mbid}", {"inc": "recordings+artist-credits+media"})
         return parse_release(data) if data else None
+
+    async def vinyl_release(self, artist: str, album: str, title: str) -> dict | bool | None:
+        """The track list of the usual vinyl pressing of an album, which must have the song that
+        was heard. False: MusicBrainz has none. None: it could not be asked; try again later."""
+        name = re.sub(r"\s*[\(\[].*?[\)\]]", "", album).strip() or album   # "(Remastered)" and the like
+        who = re.split(r"\s+(?:feat\.?|ft\.|featuring)\s+", artist, flags=re.IGNORECASE)[0].strip()
+        if not _norm(name) or not _norm(who):
+            return False
+        data = await self._mb("release", {
+            "query": f"release:{_phrase(name)} AND artist:{_phrase(who)} AND format:*Vinyl*", "limit": "100"})
+        if data is None:
+            return None
+        for found in usual_pressings(data.get("releases", []), who, name)[:MAX_PRESSINGS]:
+            rel = await self.release(found["id"])
+            if rel is None:
+                return None
+            if _pick(rel["tracks"], title):
+                return rel
+        return False
 
     async def front_cover(self, mbid: str) -> bytes | None:
         return await self.fetch(f"https://coverartarchive.org/release/{mbid}/front-500")

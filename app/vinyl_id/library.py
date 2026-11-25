@@ -137,9 +137,10 @@ class TrackMixin:
     """Track lists for pre-loaded albums (side, position, title, length)."""
 
     @locked
-    def add_tracks(self, album_id: int, mbid: str, tracks: list[dict]) -> None:
+    def add_tracks(self, album_id: int, mbid: str, tracks: list[dict], fetched: bool = False) -> None:
         """Store (replace) an album's track list. Links to songs already learned, and lengths
-        measured or typed, are kept by title."""
+        measured or typed, are kept by title. fetched=True: the app got the list by itself, so
+        it goes again when the album's last song is forgotten."""
         rows = self.db.execute(
             "SELECT title, song_id, measured, measured_q, typed FROM tracks WHERE album_id=?", (album_id,)).fetchall()
         titles = [t.get("title") or "" for t in tracks]
@@ -176,7 +177,7 @@ class TrackMixin:
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (album_id, t["n"], t.get("disc", 1), t["side"], t["pos"], title, t.get("length"),
                      *((was["song_id"], was["measured"], was["measured_q"], was["typed"]) if was else (None,) * 4)))
-            self.db.execute("UPDATE albums SET mbid=? WHERE id=?", (mbid, album_id))
+            self.db.execute("UPDATE albums SET mbid=?, tracks_fetched=? WHERE id=?", (mbid, int(fetched), album_id))
         except Exception:
             self.db.rollback()                   # half a track list must not be saved by the next write
             raise
@@ -360,6 +361,8 @@ class Library(TrackMixin):
         """Columns added after the first release."""
         if "mbid" not in self._columns("albums"):
             self.db.execute("ALTER TABLE albums ADD COLUMN mbid TEXT")
+        if "tracks_fetched" not in self._columns("albums"):   # a track list the app got by itself
+            self.db.execute("ALTER TABLE albums ADD COLUMN tracks_fetched INTEGER NOT NULL DEFAULT 0")
         if "disc" not in self._columns("tracks"):
             self.db.execute("ALTER TABLE tracks ADD COLUMN disc INTEGER NOT NULL DEFAULT 1")
         for column, kind in (("measured", "REAL"), ("measured_q", "INTEGER"), ("typed", "REAL")):
@@ -615,7 +618,9 @@ class Library(TrackMixin):
         return was is not None
 
     def _gc_album(self, album_id: int | None, keep_fetched: bool = True) -> None:
-        """A song just left this album: drop the album if it now has no songs and no track list.
+        """A song just left this album: drop the album if it now has no songs and no track list
+        of yours (a list the app fetched by itself does not keep an album: a song taken for
+        another would leave it behind for good).
         (Only this one: an album you added and have not filled yet is left alone.)
         Its covers are set aside for a while instead of deleted, so a slip can be undone.
         keep_fetched=False: the album only emptied because its song turned out to be a track of
@@ -623,7 +628,7 @@ class Library(TrackMixin):
         gone = self.db.execute(
             "SELECT id, artist, album, art_locked FROM albums WHERE id=? AND id NOT IN "
             "(SELECT album_id FROM songs WHERE album_id IS NOT NULL) "
-            "AND id NOT IN (SELECT album_id FROM tracks)", (album_id,)).fetchall()
+            "AND (tracks_fetched=1 OR id NOT IN (SELECT album_id FROM tracks))", (album_id,)).fetchall()
         for a in gone:
             if keep_fetched or a["art_locked"]:
                 self._set_aside(self.art_dir / f"{a['id']}.jpg", a["artist"], a["album"], None)
@@ -631,6 +636,7 @@ class Library(TrackMixin):
                 (self.art_dir / f"{a['id']}.jpg").unlink(missing_ok=True)
             for p in self.art_dir.glob(f"{a['id']}-disc*.jpg"):
                 self._set_aside(p, a["artist"], a["album"], int(p.stem.split("-disc")[1]))
+            self.db.execute("DELETE FROM tracks WHERE album_id=?", (a["id"],))
             self.db.execute("DELETE FROM albums WHERE id=?", (a["id"],))
 
     def _set_aside(self, path: Path, artist: str, album: str, disc: int | None) -> None:
